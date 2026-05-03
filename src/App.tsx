@@ -1,0 +1,197 @@
+import React, { useEffect, useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import { Auth } from './components/Auth';
+import { Sidebar } from './components/Sidebar';
+import { Dashboard } from './components/Dashboard';
+import { Transfer } from './components/Transfer';
+import { Deposit } from './components/Deposit';
+import { Bills } from './components/Bills';
+import { History } from './components/History';
+import { Goals } from './components/Goals';
+import { Loan } from './components/Loan';
+import { Profile } from './components/Profile';
+import { AdminPanel } from './components/AdminPanel';
+import { Bell } from 'lucide-react';
+import { cn } from './lib/utils';
+import { auth } from './lib/firebase';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { subscribeToUserData, subscribeToCollection } from './lib/firebaseUtils';
+
+export default function App() {
+  const [user, setUser] = useState<any>(null);
+  const [userData, setUserData] = useState<any>(null);
+  const [transactions, setTransactions] = useState<any[]>([]);
+  const [goals, setGoals] = useState<any[]>([]);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const unsubAuth = onAuthStateChanged(auth, (currentUser) => {
+      if (currentUser) {
+        setAuthError(null);
+        setUser({ uid: currentUser.uid, email: currentUser.email });
+      } else {
+        setUser(null);
+        setUserData(null);
+        setLoading(false);
+      }
+    });
+    return () => unsubAuth();
+  }, []);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+
+    const unsubUser = subscribeToUserData(user.uid, (data) => {
+      setUserData(data);
+      if (data && data.isAdmin && activeTab === 'dashboard') setActiveTab('dashboard'); // could redirect to admin
+      setLoading(false);
+    }, (err) => {
+      setAuthError("Failed to fetch user profile. Please check Firebase rules.");
+      setLoading(false);
+    });
+
+    const unsubTx = subscribeToCollection(user.uid, 'transactions', setTransactions, (err) => setAuthError("Failed to fetch transactions."));
+    const unsubGoals = subscribeToCollection(user.uid, 'goals', setGoals, (err) => setAuthError("Failed to fetch goals."));
+    const unsubNotifs = subscribeToCollection(user.uid, 'notifications', setNotifications, (err) => setAuthError("Failed to fetch notifications."));
+
+    return () => {
+      unsubUser();
+      unsubTx();
+      unsubGoals();
+      unsubNotifs();
+    };
+  }, [user?.uid]);
+
+  if (loading) {
+    return <div className="min-h-screen bg-[#0A0B0D] flex items-center justify-center text-gray-400">Loading...</div>;
+  }
+
+  if (authError) {
+    return (
+      <div className="min-h-screen bg-[#0A0B0D] flex flex-col items-center justify-center p-8">
+        <div className="bg-red-500/10 border border-red-500/30 text-red-500 rounded-xl p-6 flex flex-col items-center max-w-md text-center">
+          <div className="text-xl mb-2 font-bold flex items-center gap-2">⚠️ Database Connection Issue</div>
+          <p className="text-sm opacity-90 mb-6">{authError}</p>
+          <div className="text-left bg-[#0A0B0D] p-4 rounded-lg text-xs font-mono space-y-2 mb-6">
+            <p className="font-semibold text-gray-300">Quick Fix:</p>
+            <p>1. Go to Firebase Console &gt; Firestore Database</p>
+            <p>2. Select the "Rules" tab</p>
+            <p>3. Update your rules to allow read/write</p>
+          </div>
+          <button onClick={() => { signOut(auth); setAuthError(null); }} className="bg-white/10 hover:bg-white/20 px-6 py-2 rounded-lg font-medium transition-colors">
+            Sign Out & Try Again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user || (!userData && !loading)) {
+    return <Auth onLogin={() => {}} />;
+  }
+
+  const handleLogout = async () => {
+    await signOut(auth);
+    setActiveTab('dashboard');
+  };
+
+  const appData = { ...userData, transactions, goals, notifications };
+
+  return (
+    <div className="min-h-screen flex bg-[#0A0B0D] text-gray-100 font-sans tracking-tight selection:bg-blue-600/30">
+      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} isAdmin={userData.isAdmin} onLogout={handleLogout} />
+      
+      <main className="flex-1 flex flex-col h-screen overflow-hidden">
+        {/* Header */}
+        <header className="h-16 px-8 flex items-center justify-between border-b border-white/5 bg-[#0A0B0D] sticky top-0 z-10">
+          <div className="relative w-64">
+            <input type="text" placeholder="Search transactions..." className="w-full bg-[#16191F] border-none text-xs py-2 px-4 rounded-lg focus:ring-1 focus:ring-blue-500/50 outline-none text-white" />
+          </div>
+          
+          <div className="flex items-center gap-6 relative">
+            <div className="flex items-center gap-2 text-sm text-gray-400 font-medium">
+              <span className="w-2 h-2 rounded-full bg-green-500"></span>Server Online
+            </div>
+            
+            <button 
+              onClick={() => setShowNotifications(!showNotifications)}
+              className="relative text-gray-400 hover:text-white transition-colors"
+            >
+              <div className="text-xl">🔔</div>
+              {notifications?.filter((n: any) => !n.read).length > 0 && (
+                <div className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full border-2 border-[#0A0B0D]" />
+              )}
+            </button>
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold overflow-hidden">
+                {userData.avatar ? (
+                  <img src={userData.avatar} alt="avatar" className="w-full h-full object-cover" />
+                ) : (
+                  userData.name?.substring(0,2).toUpperCase()
+                )}
+              </div>
+              <div className="hidden md:block">
+                <div className="text-sm font-medium">{userData.name}</div>
+                <div className="text-[10px] text-gray-500 uppercase tracking-widest">{userData.isAdmin ? 'Super Admin' : 'Standard User'}</div>
+              </div>
+            </div>
+
+            {/* Notifications Dropdown */}
+            <AnimatePresence>
+              {showNotifications && (
+                <motion.div 
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 10 }}
+                  className="absolute top-full right-0 mt-4 w-80 bg-[#16191F] border border-white/5 rounded-xl shadow-2xl overflow-hidden z-50 text-left"
+                >
+                  <div className="p-4 border-b border-white/5 font-medium text-gray-200">Notifications</div>
+                  <div className="max-h-80 overflow-y-auto">
+                    {notifications?.length === 0 ? (
+                      <div className="p-4 text-center text-sm text-gray-500">No new notifications</div>
+                    ) : (
+                      notifications?.map((n: any) => (
+                        <div key={n.id} className={cn("p-4 border-b border-white/5 text-sm", !n.read && "bg-white/5")}>
+                          <div className="text-gray-300 mb-1">{n.message}</div>
+                          <div className="text-xs text-gray-500">{new Date(n.date).toLocaleString()}</div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </header>
+
+        {/* Content Area */}
+        <div className="flex-1 overflow-y-auto p-8 relative">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={activeTab}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.2 }}
+            >
+              {activeTab === 'dashboard' && <Dashboard userData={appData} setActiveTab={setActiveTab} />}
+              {activeTab === 'transfer' && <Transfer user={user.uid} onComplete={() => setActiveTab('dashboard')} />}
+              {activeTab === 'deposit' && <Deposit user={user.uid} onComplete={() => setActiveTab('dashboard')} />}
+              {activeTab === 'bills' && <Bills user={user.uid} onComplete={() => setActiveTab('dashboard')} balance={userData.balance} />}
+              {activeTab === 'history' && <History transactions={transactions} />}
+              {activeTab === 'goals' && <Goals user={user.uid} goals={goals} balance={userData.balance} onComplete={() => {}} />}
+              {activeTab === 'loan' && <Loan />}
+              {activeTab === 'profile' && <Profile userData={appData} user={user.uid} onComplete={() => {}} />}
+              {activeTab === 'admin' && userData.isAdmin && <AdminPanel adminUser={user.uid} />}
+            </motion.div>
+          </AnimatePresence>
+        </div>
+      </main>
+    </div>
+  );
+}
