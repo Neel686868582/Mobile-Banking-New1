@@ -26,7 +26,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [showNotifications, setShowNotifications] = useState(false);
   const [loading, setLoading] = useState(true);
-
+  const [is2faVerified, setIs2faVerified] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -37,6 +37,7 @@ export default function App() {
       } else {
         setUser(null);
         setUserData(null);
+        setIs2faVerified(false);
         setLoading(false);
       }
     });
@@ -91,22 +92,99 @@ export default function App() {
     );
   }
 
+  const handleLogout = async () => {
+    await signOut(auth);
+    setActiveTab('dashboard');
+    setIs2faVerified(false);
+  };
+
+  const handleVerify2FA = async (token: string) => {
+    try {
+      const resp = await fetch('/api/2fa/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user: user.uid, token })
+      });
+      const data = await resp.json();
+      if (data.success) {
+        setIs2faVerified(true);
+      } else {
+        alert(data.message || 'Invalid code');
+      }
+    } catch (err) {
+      alert('Verification failed');
+    }
+  };
+
   if (!user || (!userData && !loading)) {
     return <Auth onLogin={() => {}} />;
   }
 
-  const handleLogout = async () => {
-    await signOut(auth);
-    setActiveTab('dashboard');
-  };
+  if (userData?.twoFactorEnabled && !is2faVerified) {
+    return (
+      <div className="min-h-screen bg-[#0A0B0D] flex items-center justify-center p-4">
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="w-full max-w-md bg-[#16191F] border border-white/5 rounded-3xl p-8 shadow-2xl text-center"
+        >
+          <div className="mb-6">
+            <div className="w-16 h-16 bg-blue-600/10 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <span className="text-3xl">🛡️</span>
+            </div>
+            <h2 className="text-2xl font-bold mb-2 text-white">Two-Step Verification</h2>
+            <p className="text-gray-400 text-sm">Enter the code from your Google Authenticator app to continue.</p>
+          </div>
+
+          <div className="space-y-6">
+            <div className="flex justify-center gap-2">
+              <input 
+                id="mfa-input"
+                type="text"
+                maxLength={6}
+                placeholder="000000"
+                autoFocus
+                className="w-full bg-[#0A0B0D] text-white border border-white/10 rounded-xl py-4 px-4 text-center text-3xl tracking-[0.5em] font-mono focus:border-blue-500 outline-none transition-all"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    const val = (e.target as HTMLInputElement).value;
+                    if (val.length === 6) {
+                      handleVerify2FA(val);
+                    }
+                  }
+                }}
+              />
+            </div>
+
+            <button 
+              onClick={() => {
+                const input = document.getElementById('mfa-input') as HTMLInputElement;
+                handleVerify2FA(input.value);
+              }}
+              className="w-full bg-blue-600 hover:bg-blue-500 text-gray-950 font-bold py-4 rounded-xl shadow-lg shadow-blue-600/20 transition-all"
+            >
+              Verify & Log In
+            </button>
+
+            <button 
+              onClick={handleLogout}
+              className="text-sm text-gray-500 hover:text-gray-400 font-medium"
+            >
+              Cancel and Sign Out
+            </button>
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
 
   const appData = { ...userData, transactions, goals, notifications };
 
   return (
-    <div className="min-h-screen flex bg-[#0A0B0D] text-gray-100 font-sans tracking-tight selection:bg-blue-600/30">
+    <div className="min-h-[100dvh] flex flex-col md:flex-row bg-[#0A0B0D] text-gray-100 font-sans tracking-tight selection:bg-blue-600/30">
       <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} isAdmin={userData.isAdmin} onLogout={handleLogout} />
       
-      <main className="flex-1 flex flex-col h-screen overflow-hidden">
+      <main className="flex-1 flex flex-col h-[100dvh] overflow-hidden pb-16 md:pb-0">
         {/* Header */}
         <header className="h-16 px-8 flex items-center justify-between border-b border-white/5 bg-[#0A0B0D] sticky top-0 z-10">
           <div className="relative w-64">
@@ -180,8 +258,8 @@ export default function App() {
               transition={{ duration: 0.2 }}
             >
               {activeTab === 'dashboard' && <Dashboard userData={appData} setActiveTab={setActiveTab} />}
-              {activeTab === 'transfer' && <Transfer user={user.uid} onComplete={() => setActiveTab('dashboard')} />}
-              {activeTab === 'deposit' && <Deposit user={user.uid} onComplete={() => setActiveTab('dashboard')} />}
+              {activeTab === 'transfer' && <Transfer user={user.uid} balance={userData.balance} onComplete={() => setActiveTab('dashboard')} />}
+              {activeTab === 'deposit' && <Deposit user={user.uid} accountNumber={userData?.accountNumber} balance={userData.balance} transactions={transactions} onComplete={() => setActiveTab('dashboard')} />}
               {activeTab === 'bills' && <Bills user={user.uid} onComplete={() => setActiveTab('dashboard')} balance={userData.balance} />}
               {activeTab === 'history' && <History transactions={transactions} />}
               {activeTab === 'goals' && <Goals user={user.uid} goals={goals} balance={userData.balance} onComplete={() => {}} />}

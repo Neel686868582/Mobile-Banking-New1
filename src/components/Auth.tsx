@@ -19,12 +19,18 @@ export function Auth({ onLogin }: { onLogin: (user: any) => void }) {
       const userDoc = await getDoc(doc(db, 'users', result.user.uid));
       
       if (userDoc.exists()) {
-        onLogin({ uid: result.user.uid, ...userDoc.data() });
+        const data = userDoc.data();
+        if (!data.accountNumber) {
+          data.accountNumber = Math.floor(100000000000 + Math.random() * 900000000000).toString();
+          await setDoc(doc(db, 'users', result.user.uid), data);
+        }
+        onLogin({ uid: result.user.uid, ...data });
       } else {
         const newUser = {
           uid: result.user.uid,
           email: result.user.email,
           name: result.user.displayName || 'User',
+          accountNumber: Math.floor(100000000000 + Math.random() * 900000000000).toString(),
           balance: 0,
           income: 0,
           expenses: 0,
@@ -69,6 +75,7 @@ export function Auth({ onLogin }: { onLogin: (user: any) => void }) {
           uid,
           email,
           name,
+          accountNumber: Math.floor(100000000000 + Math.random() * 900000000000).toString(),
           balance: 0,
           income: 0,
           expenses: 0,

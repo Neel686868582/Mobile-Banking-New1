@@ -10,9 +10,15 @@ export async function getUserData(uid: string) {
 }
 
 export function subscribeToUserData(uid: string, callback: (data: any) => void, onError?: (err: any) => void) {
-  return onSnapshot(doc(db, 'users', uid), (snapshot) => {
+  return onSnapshot(doc(db, 'users', uid), async (snapshot) => {
     if (snapshot.exists()) {
-      callback({ uid, ...snapshot.data() });
+      const data = snapshot.data();
+      if (!data.accountNumber) {
+        data.accountNumber = Math.floor(100000000000 + Math.random() * 900000000000).toString();
+        // Fire and forget to not block the callback
+        updateDoc(doc(db, 'users', uid), { accountNumber: data.accountNumber }).catch(console.error);
+      }
+      callback({ uid, ...data });
     } else {
       callback(null);
     }
@@ -98,13 +104,42 @@ export async function payBill(uid: string, category: string, provider: string, a
   });
 }
 
-export async function createGoal(uid: string, name: string, targetAmount: number) {
+export async function createGoal(uid: string, name: string, targetAmount: number, lockMonths: number = 0) {
+  const lockedUntil = lockMonths > 0 ? (Date.now() + lockMonths * 30 * 24 * 60 * 60 * 1000) : null;
   await addDoc(collection(db, 'users', uid, 'goals'), {
     name,
     targetAmount: parseFloat(targetAmount.toString()),
     currentAmount: 0,
+    lockedUntil,
     date: new Date().toISOString()
   });
+}
+
+export async function withdrawGoal(uid: string, goalId: string, currentAmount: number, goalName: string) {
+  const userRef = doc(db, 'users', uid);
+  const userSnap = await getDoc(userRef);
+  if (!userSnap.exists()) throw new Error('User not found');
+  const data = userSnap.data();
+
+  // Give money back
+  await updateDoc(userRef, {
+    balance: data.balance + currentAmount
+  });
+
+  // Remove goal
+  const goalRef = doc(db, 'users', uid, 'goals', goalId);
+  await deleteDoc(goalRef);
+
+  if (currentAmount > 0) {
+    // add transaction
+    await addDoc(collection(db, 'users', uid, 'transactions'), {
+      name: `Withdraw Goal: ${goalName}`,
+      date: new Date().toISOString(),
+      amount: currentAmount,
+      type: 'credit',
+      icon: 'Target'
+    });
+  }
 }
 
 export async function fundGoal(uid: string, goalId: string, amount: number, currentGoalAmount: number, goalName: string) {

@@ -51,7 +51,7 @@ export function Dashboard({ userData, setActiveTab }: { userData: any, setActive
               </div>
               <div>
                 <div className="text-gray-500 text-xs mb-1">A/C No.</div>
-                <div className="font-semibold text-gray-200">XXXX 4821</div>
+                <div className="font-semibold text-gray-200">XXXX {userData.accountNumber ? userData.accountNumber.slice(-4) : '4821'}</div>
               </div>
               <div>
                 <div className="text-gray-500 text-xs mb-1">IFSC</div>
