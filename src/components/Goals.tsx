@@ -60,8 +60,6 @@ export function Goals({ user, goals, balance, onComplete }: { user: string, goal
       return;
     }
     
-    if (!window.confirm(`Are you sure you want to withdraw ${formatINR(goal.currentAmount)} from "${goal.name}" back to your main balance?`)) return;
-
     setLoadingAction(true);
     try {
       await withdrawGoal(user, goal.id, goal.currentAmount, goal.name);

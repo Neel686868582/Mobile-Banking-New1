@@ -4,7 +4,7 @@ import { ArrowDownToLine, CheckCircle2, FileText, Download, Wallet, CreditCard }
 import { doDeposit } from '../lib/firebaseUtils';
 import { motion, AnimatePresence } from 'motion/react';
 
-export function Deposit({ user, accountNumber, balance, transactions, onComplete }: { user: string, accountNumber?: string, balance: number, transactions: any[], onComplete: () => void }) {
+export function Deposit({ user, accountNumber, upiId, balance, transactions, onComplete }: { user: string, accountNumber?: string, upiId?: string, balance: number, transactions: any[], onComplete: () => void }) {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState({ text: '', type: '' });
   
@@ -156,13 +156,21 @@ export function Deposit({ user, accountNumber, balance, transactions, onComplete
               name="source" 
               value={source}
               onChange={(e) => setSource(e.target.value)}
-              className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-4 px-4 focus:border-blue-500 focus:outline-none transition-colors appearance-none text-white font-medium shadow-inner"
+              className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-4 px-4 focus:border-blue-500 focus:outline-none transition-colors appearance-none text-white font-medium shadow-inner mb-4"
             >
               <option value="UPI">UPI (Google Pay, PhonePe, Paytm)</option>
               <option value="Net Banking">Net Banking</option>
               <option value="Debit Card">Debit / Credit Card</option>
               <option value="Cash/Cheque">Cash / Cheque Deposit</option>
             </select>
+            {source === 'UPI' && upiId && (
+              <div className="bg-blue-500/10 border border-blue-500/20 p-4 rounded-xl flex items-center justify-between">
+                <div>
+                  <div className="text-xs text-gray-400 mb-1">Your Personal UPI ID</div>
+                  <div className="font-mono text-blue-400 font-medium tracking-wide">{upiId}</div>
+                </div>
+              </div>
+            )}
           </div>
           
           <div>
@@ -182,7 +190,7 @@ export function Deposit({ user, accountNumber, balance, transactions, onComplete
             />
             
             {/* 2. Quick Amount Buttons */}
-            <div className="grid grid-cols-4 gap-2 mt-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3">
               {quickAmounts.map(val => (
                 <button
                   key={val}

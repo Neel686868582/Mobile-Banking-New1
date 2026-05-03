@@ -18,6 +18,11 @@ export function subscribeToUserData(uid: string, callback: (data: any) => void, 
         // Fire and forget to not block the callback
         updateDoc(doc(db, 'users', uid), { accountNumber: data.accountNumber }).catch(console.error);
       }
+      if (!data.upiId) {
+        const chars = Math.random().toString(36).substring(2, 8);
+        data.upiId = `${chars}@sbi`;
+        updateDoc(doc(db, 'users', uid), { upiId: data.upiId }).catch(console.error);
+      }
       callback({ uid, ...data });
     } else {
       callback(null);

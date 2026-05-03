@@ -110,7 +110,7 @@ export function Profile({ userData, user, onComplete }: { userData: any, user: s
       });
       const data = await resp.json();
       if (data.success) {
-        await updateUserProfile(user, { twoFactorEnabled: true });
+        await updateUserProfile(user, { twoFactorEnabled: true, twoFactorSecret: mfaData.secret });
         setMfaMsg({ text: '2FA Enabled successfully!', type: 'success' });
         setMfaData(null);
         setMfaToken('');
@@ -126,7 +126,6 @@ export function Profile({ userData, user, onComplete }: { userData: any, user: s
   };
 
   const disableMfa = async () => {
-    if (!window.confirm('Are you sure you want to disable Two-Factor Authentication?')) return;
     setMfaLoading(true);
     try {
       await fetch('/api/2fa/disable', {
@@ -134,9 +133,8 @@ export function Profile({ userData, user, onComplete }: { userData: any, user: s
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user })
       });
-      await updateUserProfile(user, { twoFactorEnabled: false });
+      await updateUserProfile(user, { twoFactorEnabled: false, twoFactorSecret: null });
       setMfaMsg({ text: '2FA Disabled', type: 'success' });
-      onComplete();
     } catch (err) {
       setMfaMsg({ text: 'Failed to disable 2FA', type: 'error' });
     } finally {

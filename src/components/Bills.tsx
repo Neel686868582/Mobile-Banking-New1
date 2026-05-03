@@ -50,8 +50,8 @@ export function Bills({ user, balance, onComplete }: { user: string, balance: nu
         <p className="text-gray-500">Pay your bills effortlessly. Amount will be deducted from your bank balance directly.</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-        <div className="md:col-span-1 border-r border-white/5 pr-8 space-y-3">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 md:gap-8">
+        <div className="md:col-span-1 border-b md:border-b-0 md:border-r border-white/5 pb-6 md:pb-0 pr-0 md:pr-8 mb-4 md:mb-0 space-y-3">
           <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">Select Category</div>
           {billTypes.map(type => {
             const Icon = type.icon;

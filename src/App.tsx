@@ -103,7 +103,7 @@ export default function App() {
       const resp = await fetch('/api/2fa/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user: user.uid, token })
+        body: JSON.stringify({ token, secret: userData?.twoFactorSecret })
       });
       const data = await resp.json();
       if (data.success) {
@@ -186,13 +186,13 @@ export default function App() {
       
       <main className="flex-1 flex flex-col h-[100dvh] overflow-hidden pb-16 md:pb-0">
         {/* Header */}
-        <header className="h-16 px-8 flex items-center justify-between border-b border-white/5 bg-[#0A0B0D] sticky top-0 z-10">
-          <div className="relative w-64">
+        <header className="h-16 px-4 md:px-8 flex items-center justify-between border-b border-white/5 bg-[#0A0B0D] sticky top-0 z-10">
+          <div className="relative w-40 md:w-64">
             <input type="text" placeholder="Search transactions..." className="w-full bg-[#16191F] border-none text-xs py-2 px-4 rounded-lg focus:ring-1 focus:ring-blue-500/50 outline-none text-white" />
           </div>
           
-          <div className="flex items-center gap-6 relative">
-            <div className="flex items-center gap-2 text-sm text-gray-400 font-medium">
+          <div className="flex items-center gap-4 md:gap-6 relative">
+            <div className="hidden md:flex items-center gap-2 text-sm text-gray-400 font-medium">
               <span className="w-2 h-2 rounded-full bg-green-500"></span>Server Online
             </div>
             
@@ -206,7 +206,7 @@ export default function App() {
               )}
             </button>
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold overflow-hidden">
+              <div className="w-8 h-8 md:w-10 md:h-10 rounded-full bg-gradient-to-tr from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold overflow-hidden">
                 {userData.avatar ? (
                   <img src={userData.avatar} alt="avatar" className="w-full h-full object-cover" />
                 ) : (
@@ -226,7 +226,7 @@ export default function App() {
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: 10 }}
-                  className="absolute top-full right-0 mt-4 w-80 bg-[#16191F] border border-white/5 rounded-xl shadow-2xl overflow-hidden z-50 text-left"
+                  className="absolute top-full right-0 mt-4 w-[calc(100vw-2rem)] md:w-80 max-w-sm bg-[#16191F] border border-white/5 rounded-xl shadow-2xl overflow-hidden z-50 text-left"
                 >
                   <div className="p-4 border-b border-white/5 font-medium text-gray-200">Notifications</div>
                   <div className="max-h-80 overflow-y-auto">
@@ -248,7 +248,7 @@ export default function App() {
         </header>
 
         {/* Content Area */}
-        <div className="flex-1 overflow-y-auto p-8 relative">
+        <div className="flex-1 overflow-y-auto p-4 md:p-8 relative">
           <AnimatePresence mode="wait">
             <motion.div
               key={activeTab}
@@ -259,7 +259,7 @@ export default function App() {
             >
               {activeTab === 'dashboard' && <Dashboard userData={appData} setActiveTab={setActiveTab} />}
               {activeTab === 'transfer' && <Transfer user={user.uid} balance={userData.balance} onComplete={() => setActiveTab('dashboard')} />}
-              {activeTab === 'deposit' && <Deposit user={user.uid} accountNumber={userData?.accountNumber} balance={userData.balance} transactions={transactions} onComplete={() => setActiveTab('dashboard')} />}
+              {activeTab === 'deposit' && <Deposit user={user.uid} accountNumber={userData?.accountNumber} upiId={userData?.upiId} balance={userData.balance} transactions={transactions} onComplete={() => setActiveTab('dashboard')} />}
               {activeTab === 'bills' && <Bills user={user.uid} onComplete={() => setActiveTab('dashboard')} balance={userData.balance} />}
               {activeTab === 'history' && <History transactions={transactions} />}
               {activeTab === 'goals' && <Goals user={user.uid} goals={goals} balance={userData.balance} onComplete={() => {}} />}

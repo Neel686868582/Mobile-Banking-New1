@@ -318,8 +318,8 @@ async function startServer() {
   });
 
   app.post('/api/2fa/verify-setup', (req, res) => {
-    const { user, token, secret } = req.body;
-    if (!user || !token || !secret) return res.status(400).json({ success: false });
+    const { token, secret } = req.body;
+    if (!token || !secret) return res.status(400).json({ success: false });
 
     const verified = speakeasy.totp.verify({
       secret: secret,
@@ -328,13 +328,6 @@ async function startServer() {
     });
 
     if (verified) {
-      if (!users[user]) {
-        // Create skeleton if not exist (unlikely if they are setting it up)
-        users[user] = { pass: '', name: user, balance: 0, transactions: [], income: 0, expenses: 0 };
-      }
-      users[user].twoFactorSecret = secret;
-      users[user].twoFactorEnabled = true;
-      saveDB();
       res.json({ success: true, message: 'Two-factor authentication enabled!' });
     } else {
       res.status(400).json({ success: false, message: 'Invalid code. Please try again.' });
@@ -342,15 +335,12 @@ async function startServer() {
   });
 
   app.post('/api/2fa/verify', (req, res) => {
-    const { user, token } = req.body;
-    const account = users[user];
+    const { token, secret } = req.body;
 
-    if (!account || !account.twoFactorEnabled || !account.twoFactorSecret) {
-      return res.status(400).json({ success: false, message: '2FA is not enabled for this user.' });
-    }
+    if (!secret) return res.status(400).json({ success: false, message: '2FA is not enabled for this user.' });
 
     const verified = speakeasy.totp.verify({
-      secret: account.twoFactorSecret,
+      secret: secret,
       encoding: 'base32',
       token: token
     });
@@ -363,13 +353,6 @@ async function startServer() {
   });
 
   app.post('/api/2fa/disable', (req, res) => {
-    const { user } = req.body;
-    const account = users[user];
-    if (account) {
-      account.twoFactorEnabled = false;
-      account.twoFactorSecret = undefined;
-      saveDB();
-    }
     res.json({ success: true });
   });
 

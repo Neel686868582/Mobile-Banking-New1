@@ -40,20 +40,20 @@ export function Dashboard({ userData, setActiveTab }: { userData: any, setActive
           
           <div>
             <div className="text-gray-500 text-sm font-semibold uppercase tracking-wider mb-2">Total Balance</div>
-            <div className="text-5xl font-sans tracking-tight text-white mb-8">
+            <div className="text-4xl md:text-5xl font-sans tracking-tight text-white mb-8 truncate">
               {formatINR(userData.balance)}
             </div>
             
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
               <div>
                 <div className="text-gray-500 text-xs mb-1">Bank</div>
-                <div className="font-semibold text-blue-400">SBI Savings</div>
+                <div className="font-semibold text-blue-400 text-sm sm:text-base">SBI Savings</div>
               </div>
               <div>
                 <div className="text-gray-500 text-xs mb-1">A/C No.</div>
-                <div className="font-semibold text-gray-200">XXXX {userData.accountNumber ? userData.accountNumber.slice(-4) : '4821'}</div>
+                <div className="font-semibold text-gray-200 text-sm sm:text-base">XXXX {userData.accountNumber ? userData.accountNumber.slice(-4) : '4821'}</div>
               </div>
-              <div>
+              <div className="hidden sm:block">
                 <div className="text-gray-500 text-xs mb-1">IFSC</div>
                 <div className="font-semibold text-gray-200">SBI001</div>
               </div>
@@ -62,14 +62,14 @@ export function Dashboard({ userData, setActiveTab }: { userData: any, setActive
         </div>
 
         {/* Quick Stats */}
-        <div className="col-span-1 flex flex-col gap-6">
-          <div className="bg-[#16191F] border border-white/5 rounded-3xl p-6 flex-1 flex flex-col justify-center">
-            <div className="text-gray-500 text-xs font-semibold uppercase tracking-wider mb-2">Total Income</div>
-            <div className="text-2xl font-medium text-blue-400">{formatINR(userData.income || 0)}</div>
+        <div className="col-span-1 flex flex-row lg:flex-col gap-4 lg:gap-6">
+          <div className="bg-[#16191F] border border-white/5 rounded-3xl p-4 lg:p-6 flex-1 flex flex-col justify-center">
+            <div className="text-gray-500 text-[10px] sm:text-xs font-semibold uppercase tracking-wider mb-1 sm:mb-2">Total Income</div>
+            <div className="text-xl sm:text-2xl font-medium text-blue-400 truncate">{formatINR(userData.income || 0)}</div>
           </div>
-          <div className="bg-[#16191F] border border-white/5 rounded-3xl p-6 flex-1 flex flex-col justify-center">
-            <div className="text-gray-500 text-xs font-semibold uppercase tracking-wider mb-2">Total Expenses</div>
-            <div className="text-2xl font-medium text-red-400">{formatINR(userData.expenses || 0)}</div>
+          <div className="bg-[#16191F] border border-white/5 rounded-3xl p-4 lg:p-6 flex-1 flex flex-col justify-center">
+            <div className="text-gray-500 text-[10px] sm:text-xs font-semibold uppercase tracking-wider mb-1 sm:mb-2">Total Expenses</div>
+            <div className="text-xl sm:text-2xl font-medium text-red-400 truncate">{formatINR(userData.expenses || 0)}</div>
           </div>
         </div>
       </div>

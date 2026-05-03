@@ -38,8 +38,6 @@ export function AdminPanel({ adminUser }: { adminUser: string }) {
   };
 
   const handleDelete = async (targetUser: string) => {
-    if (!confirm(`Are you SURE you want to delete user ${targetUser}?`)) return;
-    
     try {
       await deleteUser(targetUser);
       loadStats();

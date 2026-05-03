@@ -18,12 +18,16 @@ export function Transfer({ user, balance, onComplete }: { user: string, balance:
   const [successData, setSuccessData] = useState<{ amount: number, txId: string, method: string, date: string, toName: string, toAcc: string } | null>(null);
 
   useEffect(() => {
-    if (acc.length >= 9 && acc.length <= 16 && ifsc.length >= 4) {
-      setIsVerified(true);
+    if (method === 'UPI') {
+      setIsVerified(acc.length >= 8);
     } else {
-      setIsVerified(false);
+      if (acc.length >= 9 && acc.length <= 16 && ifsc.length >= 4) {
+        setIsVerified(true);
+      } else {
+        setIsVerified(false);
+      }
     }
-  }, [acc, ifsc]);
+  }, [acc, ifsc, method]);
 
   const quickContacts = [
     { name: 'Mom', acc: '1234567890', ifsc: 'HDFC0001234' },
@@ -192,6 +196,24 @@ export function Transfer({ user, balance, onComplete }: { user: string, balance:
       <div className="bg-[#16191F] border border-white/5 rounded-3xl p-6 sm:p-8 shadow-xl">
         <form onSubmit={handleSubmit} className="space-y-6">
           <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Payment Method</label>
+            <select 
+              value={method}
+              onChange={(e) => {
+                setMethod(e.target.value);
+                setAcc('');
+                setIfsc('');
+              }}
+              className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-4 px-4 focus:border-blue-500 focus:outline-none transition-colors appearance-none text-white font-medium"
+            >
+              <option value="UPI">UPI</option>
+              <option value="IMPS">IMPS</option>
+              <option value="NEFT">NEFT</option>
+              <option value="RTGS">RTGS (Min 2 Lakhs)</option>
+            </select>
+          </div>
+
+          <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Recipient Name</label>
             <input 
               required 
@@ -202,33 +224,47 @@ export function Transfer({ user, balance, onComplete }: { user: string, balance:
               placeholder="e.g. Priya Sharma" 
             />
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {method === 'UPI' ? (
             <div>
-              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Account Number</label>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">UPI ID / Mobile Number</label>
               <input 
                 required 
                 value={acc}
                 onChange={(e) => setAcc(e.target.value)}
                 type="text" 
-                minLength={9} 
-                maxLength={16} 
-                pattern="\d+" 
                 className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-3 px-4 focus:border-blue-500 focus:outline-none transition-colors text-white" 
-                placeholder="e.g. 1234567890" 
+                placeholder="e.g. 9876543210@upi" 
               />
             </div>
-            <div>
-              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">IFSC Code</label>
-              <input 
-                required 
-                value={ifsc}
-                onChange={(e) => setIfsc(e.target.value.toUpperCase())}
-                type="text" 
-                className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-3 px-4 focus:border-blue-500 focus:outline-none transition-colors uppercase text-white" 
-                placeholder="e.g. HDFC0001234" 
-              />
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Account Number</label>
+                <input 
+                  required 
+                  value={acc}
+                  onChange={(e) => setAcc(e.target.value)}
+                  type="text" 
+                  minLength={9} 
+                  maxLength={16} 
+                  pattern="\d+" 
+                  className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-3 px-4 focus:border-blue-500 focus:outline-none transition-colors text-white" 
+                  placeholder="e.g. 1234567890" 
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">IFSC Code</label>
+                <input 
+                  required 
+                  value={ifsc}
+                  onChange={(e) => setIfsc(e.target.value.toUpperCase())}
+                  type="text" 
+                  className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-3 px-4 focus:border-blue-500 focus:outline-none transition-colors uppercase text-white" 
+                  placeholder="e.g. HDFC0001234" 
+                />
+              </div>
             </div>
-          </div>
+          )}
 
           {/* 2. Recipient Verification Check */}
           <AnimatePresence>
@@ -261,20 +297,6 @@ export function Transfer({ user, balance, onComplete }: { user: string, balance:
               className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-4 px-4 focus:border-blue-500 focus:outline-none transition-colors text-2xl font-bold text-white shadow-inner" 
               placeholder="0.00" 
             />
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Payment Method</label>
-            <select 
-              value={method}
-              onChange={(e) => setMethod(e.target.value)}
-              className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-4 px-4 focus:border-blue-500 focus:outline-none transition-colors appearance-none text-white font-medium"
-            >
-              <option value="UPI">UPI</option>
-              <option value="IMPS">IMPS</option>
-              <option value="NEFT">NEFT</option>
-              <option value="RTGS">RTGS (Min 2 Lakhs)</option>
-            </select>
           </div>
 
           {/* 5. Transaction Summary Box */}
