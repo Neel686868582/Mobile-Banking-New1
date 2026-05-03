@@ -1,5 +1,5 @@
 import express from 'express';
-import { createServer as createViteServer } from 'vite';
+// Vite import removed from top level to allow dynamic import in development
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
@@ -368,6 +368,7 @@ async function startServer() {
   });
 
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
