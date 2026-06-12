@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { Toaster, toast } from 'react-hot-toast';
 import { Auth } from './components/Auth';
 import { Sidebar } from './components/Sidebar';
 import { Dashboard } from './components/Dashboard';
@@ -8,14 +9,15 @@ import { Deposit } from './components/Deposit';
 import { Bills } from './components/Bills';
 import { History } from './components/History';
 import { Goals } from './components/Goals';
+import { Analytics } from './components/Analytics';
 import { Loan } from './components/Loan';
 import { Profile } from './components/Profile';
 import { AdminPanel } from './components/AdminPanel';
-import { Bell } from 'lucide-react';
+import { Bell, X } from 'lucide-react';
 import { cn } from './lib/utils';
 import { auth } from './lib/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { subscribeToUserData, subscribeToCollection } from './lib/firebaseUtils';
+import { subscribeToUserData, subscribeToCollection, markAllNotificationsRead } from './lib/firebaseUtils';
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
@@ -24,16 +26,27 @@ export default function App() {
   const [goals, setGoals] = useState<any[]>([]);
   const [notifications, setNotifications] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [profileTab, setProfileTab] = useState<'personal'|'security'|'notifications'|'password'>('personal');
   const [showNotifications, setShowNotifications] = useState(false);
   const [loading, setLoading] = useState(true);
   const [is2faVerified, setIs2faVerified] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
+  const isPhoneMissing = userData && (!userData.phone || userData.phone.trim() === '');
+
+  useEffect(() => {
+    if (isPhoneMissing && activeTab !== 'profile') {
+      toast.error('Please add your mobile number in Profile Settings to continue.', { id: 'phone-missing', duration: 4000 });
+      setActiveTab('profile');
+      setProfileTab('personal');
+    }
+  }, [isPhoneMissing, activeTab]);
+
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, (currentUser) => {
       if (currentUser) {
         setAuthError(null);
-        setUser({ uid: currentUser.uid, email: currentUser.email });
+        setUser({ uid: currentUser.email!, email: currentUser.email });
       } else {
         setUser(null);
         setUserData(null);
@@ -120,7 +133,7 @@ export default function App() {
     return <Auth onLogin={() => {}} />;
   }
 
-  if (userData?.twoFactorEnabled && !is2faVerified) {
+  if (userData?.twoFactorEnabled && userData?.require2FAForLogin !== false && !is2faVerified) {
     return (
       <div className="min-h-screen bg-[#0A0B0D] flex items-center justify-center p-4">
         <motion.div 
@@ -182,19 +195,20 @@ export default function App() {
 
   return (
     <div className="min-h-[100dvh] flex flex-col md:flex-row bg-[#0A0B0D] text-gray-100 font-sans tracking-tight selection:bg-blue-600/30">
+      <Toaster position="top-right" toastOptions={{ style: { background: '#16191F', color: '#fff', border: '1px solid rgba(255,255,255,0.1)' } }} />
       <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} isAdmin={userData.isAdmin} onLogout={handleLogout} />
       
       <main className="flex-1 flex flex-col h-[100dvh] overflow-hidden pb-16 md:pb-0">
         {/* Header */}
-        <header className="h-16 px-4 md:px-8 flex items-center justify-between border-b border-white/5 bg-[#0A0B0D] sticky top-0 z-10">
-          <div className="relative w-40 md:w-64">
-            <input type="text" placeholder="Search transactions..." className="w-full bg-[#16191F] border-none text-xs py-2 px-4 rounded-lg focus:ring-1 focus:ring-blue-500/50 outline-none text-white" />
-          </div>
+        <header className="h-16 px-4 md:px-8 flex items-center justify-between border-b border-white/5 bg-[#0A0B0D] sticky top-0 z-10 w-full">
           
+          <div className="flex-1">
+            <h1 className="text-lg md:text-xl font-medium text-white tracking-tight truncate">
+              Welcome, <span className="text-blue-400">{userData.name?.split(' ')[0] || 'User'}</span>
+            </h1>
+          </div>
+
           <div className="flex items-center gap-4 md:gap-6 relative">
-            <div className="hidden md:flex items-center gap-2 text-sm text-gray-400 font-medium">
-              <span className="w-2 h-2 rounded-full bg-green-500"></span>Server Online
-            </div>
             
             <button 
               onClick={() => setShowNotifications(!showNotifications)}
@@ -205,7 +219,10 @@ export default function App() {
                 <div className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full border-2 border-[#0A0B0D]" />
               )}
             </button>
-            <div className="flex items-center gap-3">
+            <div 
+              onClick={() => setActiveTab('profile')}
+              className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
+            >
               <div className="w-8 h-8 md:w-10 md:h-10 rounded-full bg-gradient-to-tr from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold overflow-hidden">
                 {userData.avatar ? (
                   <img src={userData.avatar} alt="avatar" className="w-full h-full object-cover" />
@@ -228,7 +245,19 @@ export default function App() {
                   exit={{ opacity: 0, y: 10 }}
                   className="absolute top-full right-0 mt-4 w-[calc(100vw-2rem)] md:w-80 max-w-sm bg-[#16191F] border border-white/5 rounded-xl shadow-2xl overflow-hidden z-50 text-left"
                 >
-                  <div className="p-4 border-b border-white/5 font-medium text-gray-200">Notifications</div>
+                  <div className="p-4 border-b border-white/5 flex items-center justify-between">
+                    <span className="font-medium text-gray-200">Notifications</span>
+                    <button 
+                      onClick={async () => {
+                        await markAllNotificationsRead(user.uid, notifications);
+                        setShowNotifications(false);
+                      }}
+                      className="p-1 text-gray-400 hover:text-white rounded-md hover:bg-white/5 transition-colors"
+                      title="Clear & Close"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
                   <div className="max-h-80 overflow-y-auto">
                     {notifications?.length === 0 ? (
                       <div className="p-4 text-center text-sm text-gray-500">No new notifications</div>
@@ -257,14 +286,15 @@ export default function App() {
               exit={{ opacity: 0, y: -10 }}
               transition={{ duration: 0.2 }}
             >
-              {activeTab === 'dashboard' && <Dashboard userData={appData} setActiveTab={setActiveTab} />}
-              {activeTab === 'transfer' && <Transfer user={user.uid} balance={userData.balance} onComplete={() => setActiveTab('dashboard')} />}
-              {activeTab === 'deposit' && <Deposit user={user.uid} accountNumber={userData?.accountNumber} upiId={userData?.upiId} balance={userData.balance} transactions={transactions} onComplete={() => setActiveTab('dashboard')} />}
-              {activeTab === 'bills' && <Bills user={user.uid} onComplete={() => setActiveTab('dashboard')} balance={userData.balance} />}
+              {activeTab === 'dashboard' && <Dashboard userData={appData} setActiveTab={setActiveTab} onEnable2FA={() => { setProfileTab('security'); setActiveTab('profile'); }} />}
+              {activeTab === 'analytics' && <Analytics appData={appData} />}
+              {activeTab === 'transfer' && <Transfer user={user.uid} userData={userData} balance={userData.balance} onComplete={() => setActiveTab('dashboard')} />}
+              {activeTab === 'deposit' && <Deposit user={user.uid} userData={userData} accountNumber={userData?.accountNumber} upiId={userData?.upiId} balance={userData.balance} transactions={transactions} onComplete={() => setActiveTab('dashboard')} />}
+              {activeTab === 'bills' && <Bills user={user.uid} userData={userData} onComplete={() => setActiveTab('dashboard')} balance={userData.balance} />}
               {activeTab === 'history' && <History transactions={transactions} />}
-              {activeTab === 'goals' && <Goals user={user.uid} goals={goals} balance={userData.balance} onComplete={() => {}} />}
+              {activeTab === 'goals' && <Goals user={user.uid} userData={userData} goals={goals} balance={userData.balance} onComplete={() => {}} />}
               {activeTab === 'loan' && <Loan />}
-              {activeTab === 'profile' && <Profile userData={appData} user={user.uid} onComplete={() => {}} />}
+              {activeTab === 'profile' && <Profile userData={appData} user={user.uid} onComplete={() => {}} initialTab={profileTab} />}
               {activeTab === 'admin' && userData.isAdmin && <AdminPanel adminUser={user.uid} />}
             </motion.div>
           </AnimatePresence>

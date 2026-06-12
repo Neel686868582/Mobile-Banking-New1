@@ -1,24 +1,46 @@
+import { useState } from 'react';
 import { formatINR } from '../lib/utils';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
-import { ArrowUpRight, ArrowDownLeft, Wallet, Building2, Smartphone, Zap, Droplet, Tv } from 'lucide-react';
+import { ArrowUpRight, ArrowDownLeft, Wallet, Building2, Smartphone, Zap, Droplet, Tv, CheckCircle2, Download, X, ReceiptText, Target, PlusCircle, MinusCircle, Shield } from 'lucide-react';
 import { format, parseISO, subDays } from 'date-fns';
+import { motion, AnimatePresence } from 'motion/react';
+import * as htmlToImage from 'html-to-image';
+import { toast } from 'react-hot-toast';
+import { CompactVintageBadge } from './CompactVintageBadge';
+import { VintageSeal } from './VintageSeal';
 
 const txIcons: any = {
   ArrowUpRight: ArrowUpRight,
   ArrowDownLeft: ArrowDownLeft,
-  FileText: ReceiptTextIcon,
-  Target: TargetIcon,
-  PlusCircle: PlusCircleIcon,
-  MinusCircle: MinusCircleIcon
+  FileText: ReceiptText,
+  Target: Target,
+  PlusCircle: PlusCircle,
+  MinusCircle: MinusCircle
 };
 
-// Generic icons
-function ReceiptTextIcon(props: any) { return <ReceiptTextIcon {...props} /> } // placeholder
-function TargetIcon(props: any) { return <TargetIcon {...props} /> }
-function PlusCircleIcon(props: any) { return <PlusCircleIcon {...props} /> }
-function MinusCircleIcon(props: any) { return <MinusCircleIcon {...props} /> }
+export function Dashboard({ userData, setActiveTab, onEnable2FA }: { userData: any, setActiveTab: (t: string) => void, onEnable2FA?: () => void }) {
+  const [selectedTx, setSelectedTx] = useState<any>(null);
 
-export function Dashboard({ userData, setActiveTab }: { userData: any, setActiveTab: (t: string) => void }) {
+  const handleDownloadReceipt = async () => {
+    if (!selectedTx) return;
+    try {
+      const element = document.getElementById('receipt-content-dashboard');
+      if (!element) return;
+      
+      const dataUrl = await htmlToImage.toJpeg(element, { 
+        backgroundColor: '#16191F',
+        pixelRatio: 2
+      });
+      
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = `receipt_${selectedTx.id}.png`;
+      a.click();
+      toast.success("Receipt downloaded successfully!");
+    } catch(err: any) {
+      toast.error(`Failed to download receipt: ${err?.message || "Unknown error"}`);
+    }
+  };
   
   // mock chart data for past 7 days based on transactions, or generic if not enough
   const chartData = Array.from({ length: 7 }).map((_, i) => {
@@ -39,7 +61,10 @@ export function Dashboard({ userData, setActiveTab }: { userData: any, setActive
           <div className="absolute -top-32 -right-32 w-80 h-80 bg-blue-600/10 blur-[80px] rounded-full pointer-events-none" />
           
           <div>
-            <div className="text-gray-500 text-sm font-semibold uppercase tracking-wider mb-2">Total Balance</div>
+            <div className="flex items-center justify-between mb-4 sm:mb-2">
+              <div className="text-gray-500 text-sm font-semibold uppercase tracking-wider">Total Balance</div>
+              <CompactVintageBadge enabled={userData.twoFactorEnabled} onClick={onEnable2FA} />
+            </div>
             <div className="text-4xl md:text-5xl font-sans tracking-tight text-white mb-8 truncate">
               {formatINR(userData.balance)}
             </div>
@@ -57,6 +82,13 @@ export function Dashboard({ userData, setActiveTab }: { userData: any, setActive
                 <div className="text-gray-500 text-xs mb-1">IFSC</div>
                 <div className="font-semibold text-gray-200">SBI001</div>
               </div>
+            </div>
+
+            <div className="mt-8 flex items-center gap-3">
+              <VintageSeal className="w-8 h-8 drop-shadow" />
+              <span className="text-[13px] sm:text-[14px] font-sans font-semibold text-white/90 uppercase tracking-[0.15em] leading-tight">
+                RUPEEPAY SECURED BY 2FA
+              </span>
             </div>
           </div>
         </div>
@@ -121,22 +153,29 @@ export function Dashboard({ userData, setActiveTab }: { userData: any, setActive
             <button onClick={() => setActiveTab('history')} className="text-sm text-blue-400 hover:underline">View All</button>
           </div>
           <div className="flex-1 overflow-y-auto pr-2 space-y-4">
-            {userData.transactions?.slice(0, 5).map((tx: any) => (
-              <div key={tx.id} className="flex items-center justify-between p-4 bg-[#0A0B0D] border border-white/5 rounded-2xl">
-                <div className="flex items-center gap-4">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center ${tx.type === 'credit' ? 'bg-blue-600/10 text-blue-400' : 'bg-red-500/10 text-red-400'}`}>
-                    {tx.type === 'credit' ? <ArrowDownLeft className="w-5 h-5"/> : <ArrowUpRight className="w-5 h-5"/>}
+            {userData.transactions?.slice(0, 5).map((tx: any) => {
+              const Icon = txIcons[tx.icon] || ReceiptText;
+              return (
+                <div 
+                  key={tx.id} 
+                  onClick={() => setSelectedTx(tx)}
+                  className="flex items-center justify-between p-4 bg-[#0A0B0D] border border-white/5 hover:border-gray-700 transition-colors rounded-2xl cursor-pointer"
+                >
+                  <div className="flex items-center gap-4">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${tx.type === 'credit' ? 'bg-blue-600/10 text-blue-400' : 'bg-red-500/10 text-red-400'}`}>
+                      <Icon className="w-5 h-5"/>
+                    </div>
+                    <div>
+                      <div className="font-medium">{tx.name}</div>
+                      <div className="text-xs text-gray-500">{new Date(tx.date).toLocaleDateString()}</div>
+                    </div>
                   </div>
-                  <div>
-                    <div className="font-medium">{tx.name}</div>
-                    <div className="text-xs text-gray-500">{new Date(tx.date).toLocaleDateString()}</div>
+                  <div className={`font-semibold ${tx.type === 'credit' ? 'text-blue-400' : 'text-gray-200'}`}>
+                    {tx.type === 'credit' ? '+' : '-'}{formatINR(tx.amount)}
                   </div>
                 </div>
-                <div className={`font-semibold ${tx.type === 'credit' ? 'text-blue-400' : 'text-gray-200'}`}>
-                  {tx.type === 'credit' ? '+' : '-'}{formatINR(tx.amount)}
-                </div>
-              </div>
-            ))}
+              );
+            })}
             {(!userData.transactions || userData.transactions.length === 0) && (
               <div className="text-center text-gray-500 text-sm py-8">No transactions yet</div>
             )}
@@ -144,7 +183,80 @@ export function Dashboard({ userData, setActiveTab }: { userData: any, setActive
         </div>
 
       </div>
-
+      
+      <AnimatePresence>
+        {selectedTx && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }} 
+              animate={{ opacity: 1 }} 
+              exit={{ opacity: 0 }} 
+              onClick={() => setSelectedTx(null)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }} 
+              animate={{ opacity: 1, scale: 1, y: 0 }} 
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-[#16191F] border border-white/10 rounded-3xl p-8 shadow-2xl relative w-full max-w-md z-10"
+            >
+              <button 
+                onClick={() => setSelectedTx(null)}
+                className="absolute top-4 right-4 text-gray-400 hover:text-white bg-[#0A0B0D] p-2 rounded-full border border-white/5 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+              
+              <div id="receipt-content-dashboard" className="p-8 pb-4 relative mt-4">
+                <div className="absolute top-0 left-0 w-full h-2 bg-green-500" />
+                <div className="mt-2 mb-6 text-center">
+                  <h1 className="text-xl font-bold text-gray-300">MOBILE BANKING</h1>
+                </div>
+                <div className="w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 bg-green-500/10 text-green-500">
+                  <CheckCircle2 className="w-10 h-10" />
+                </div>
+                
+                <h2 className="text-3xl font-bold text-white mb-2 text-center">{formatINR(selectedTx.amount)}</h2>
+                <p className="font-medium mb-8 text-center text-green-400">
+                  {selectedTx.type === 'credit' ? 'Received' : 'Sent/Paid'} Successfully
+                </p>
+                
+                <div className="bg-[#0A0B0D] rounded-2xl p-6 mb-2 text-sm text-left border border-white/5 space-y-4">
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">{selectedTx.type === 'credit' ? 'From' : 'To'}</span>
+                    <span className="text-white font-medium text-right max-w-[150px] truncate">{selectedTx.toName || selectedTx.name}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Account / Source</span>
+                    <span className="text-white">{selectedTx.toAcc || 'N/A'}</span>
+                  </div>
+                  <div className="flex justify-between border-t border-white/5 pt-4">
+                    <span className="text-gray-500">Transaction ID</span>
+                    <span className="text-white font-mono text-xs max-w-[150px] truncate" title={selectedTx.id}>{selectedTx.id}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Date & Time</span>
+                    <span className="text-white text-right max-w-[150px]">{new Date(selectedTx.date).toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Payment Method</span>
+                    <span className="text-white text-right max-w-[150px]">{selectedTx.method || 'System Internal'}</span>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="flex gap-4 mt-6">
+                <button 
+                  onClick={handleDownloadReceipt}
+                  className="w-full bg-[#232730] hover:bg-[#2A2F3A] text-white font-semibold py-4 rounded-xl transition-all flex items-center justify-center gap-2"
+                >
+                  <Download className="w-5 h-5 text-blue-400" /> Download Receipt
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

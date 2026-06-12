@@ -1,9 +1,10 @@
-import { Wallet, LayoutDashboard, ArrowRightLeft, ArrowDownToLine, Receipt, Clock, Target, Calculator, UserRound, ShieldAlert, LogOut } from 'lucide-react';
+import { Wallet, LayoutDashboard, BarChart3, ArrowRightLeft, ArrowDownToLine, Receipt, Clock, Target, Calculator, UserRound, ShieldAlert, LogOut } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 export function Sidebar({ activeTab, setActiveTab, isAdmin, onLogout }: { activeTab: string, setActiveTab: (t: string) => void, isAdmin: boolean, onLogout: () => void }) {
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'analytics', label: 'Analytics', icon: BarChart3 },
     { id: 'transfer', label: 'Transfer', icon: ArrowRightLeft },
     { id: 'deposit', label: 'Deposit', icon: ArrowDownToLine },
     { id: 'bills', label: 'Bill Payments', icon: Receipt },

@@ -3,8 +3,11 @@ import { formatINR } from '../lib/utils';
 import { ArrowRightLeft, CheckCircle2, Wallet, UserIcon, Download } from 'lucide-react';
 import { doTransfer } from '../lib/firebaseUtils';
 import { motion, AnimatePresence } from 'motion/react';
+import { toast } from 'react-hot-toast';
+import * as htmlToImage from 'html-to-image';
+import { MfaModal } from './MfaModal';
 
-export function Transfer({ user, balance, onComplete }: { user: string, balance: number, onComplete: () => void }) {
+export function Transfer({ user, userData, balance, onComplete }: { user: string, userData?: any, balance: number, onComplete: () => void }) {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState({ text: '', type: '' });
 
@@ -16,6 +19,7 @@ export function Transfer({ user, balance, onComplete }: { user: string, balance:
 
   const [isVerified, setIsVerified] = useState(false);
   const [successData, setSuccessData] = useState<{ amount: number, txId: string, method: string, date: string, toName: string, toAcc: string } | null>(null);
+  const [showMfa, setShowMfa] = useState(false);
 
   useEffect(() => {
     if (method === 'UPI') {
@@ -55,8 +59,8 @@ export function Transfer({ user, balance, onComplete }: { user: string, balance:
   const currentInfo = getTransferInfo(method);
   const numAmount = Number(amount) || 0;
 
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
+  const handleSubmit = async (e?: React.FormEvent<HTMLFormElement>) => {
+    if (e) e.preventDefault();
     setMsg({ text: '', type: '' });
     
     if (numAmount <= 0) {
@@ -68,11 +72,17 @@ export function Transfer({ user, balance, onComplete }: { user: string, balance:
       return;
     }
 
+    if (userData?.twoFactorEnabled && userData?.require2FAForTransactions && !showMfa && e) {
+      setShowMfa(true);
+      return;
+    }
+
     setLoading(true);
     try {
-      await doTransfer(user, name, numAmount + currentInfo.fee, method);
+      const txId = await doTransfer(user, name, numAmount + currentInfo.fee, method, acc);
       
-      const txId = 'TXN' + Math.random().toString(36).substr(2, 9).toUpperCase();
+      await new Promise(r => setTimeout(r, 2000));
+      
       setSuccessData({
         amount: numAmount,
         txId,
@@ -81,21 +91,38 @@ export function Transfer({ user, balance, onComplete }: { user: string, balance:
         toName: name,
         toAcc: acc
       });
+      toast.success("Transfer Completed Successfully!");
 
       setAmount('');
       setAcc('');
       setIfsc('');
       setName('');
+      setShowMfa(false);
     } catch (err: any) {
       setMsg({ text: err.message || 'Transfer failed', type: 'error' });
+      setShowMfa(false);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleDownloadReceipt = () => {
-    // Fake download interaction
-    alert("Receipt downloaded successfully!");
+  const handleDownloadReceipt = async () => {
+    if (!successData) return;
+    try {
+      const element = document.getElementById('receipt-content');
+      if (!element) return;
+      const dataUrl = await htmlToImage.toJpeg(element, { 
+        backgroundColor: '#16191F',
+        pixelRatio: 2
+      });
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = `transfer_receipt_${successData.txId}.png`;
+      a.click();
+      toast.success("Receipt downloaded successfully!");
+    } catch(err: any) {
+      toast.error(`Failed to download receipt: ${err?.message || "Unknown error"}`);
+    }
   };
 
   if (successData) {
@@ -106,38 +133,43 @@ export function Transfer({ user, balance, onComplete }: { user: string, balance:
           animate={{ opacity: 1, scale: 1, y: 0 }} 
           className="bg-[#16191F] border border-green-500/30 rounded-3xl p-8 shadow-2xl shadow-green-500/10 text-center relative overflow-hidden"
         >
-          <div className="absolute top-0 left-0 w-full h-2 bg-green-500" />
-          <div className="w-20 h-20 bg-green-500/10 rounded-full flex items-center justify-center mx-auto mb-6">
-            <CheckCircle2 className="w-10 h-10 text-green-500" />
+          <div id="receipt-content" className="p-8 pb-4 relative">
+            <div className="absolute top-0 left-0 w-full h-2 bg-green-500" />
+            <div className="mt-2 mb-6">
+              <h1 className="text-xl font-bold text-gray-300">MOBILE BANKING</h1>
+            </div>
+            <div className="w-20 h-20 bg-green-500/10 rounded-full flex items-center justify-center mx-auto mb-6">
+              <CheckCircle2 className="w-10 h-10 text-green-500" />
+            </div>
+            
+            <h2 className="text-3xl font-bold text-white mb-2">{formatINR(successData.amount)}</h2>
+            <p className="text-green-400 font-medium mb-8">Transferred Successfully</p>
+            
+            <div className="bg-[#0A0B0D] rounded-2xl p-6 mb-2 text-sm text-left border border-white/5 space-y-4">
+              <div className="flex justify-between">
+                <span className="text-gray-500">Sent To</span>
+                <span className="text-white font-medium">{successData.toName}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Account</span>
+                <span className="text-white">{successData.toAcc}</span>
+              </div>
+              <div className="flex justify-between border-t border-white/5 pt-4">
+                <span className="text-gray-500">Transaction ID</span>
+                <span className="text-white font-mono">{successData.txId}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Date & Time</span>
+                <span className="text-white">{successData.date}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Payment Method</span>
+                <span className="text-white">{successData.method}</span>
+              </div>
+            </div>
           </div>
           
-          <h2 className="text-3xl font-bold text-white mb-2">{formatINR(successData.amount)}</h2>
-          <p className="text-green-400 font-medium mb-8">Transferred Successfully</p>
-          
-          <div className="bg-[#0A0B0D] rounded-2xl p-6 mb-8 text-sm text-left border border-white/5 space-y-4">
-            <div className="flex justify-between">
-              <span className="text-gray-500">Sent To</span>
-              <span className="text-white font-medium">{successData.toName}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-500">Account</span>
-              <span className="text-white">{successData.toAcc}</span>
-            </div>
-            <div className="flex justify-between border-t border-white/5 pt-4">
-              <span className="text-gray-500">Transaction ID</span>
-              <span className="text-white font-mono">{successData.txId}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-500">Date & Time</span>
-              <span className="text-white">{successData.date}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-500">Payment Method</span>
-              <span className="text-white">{successData.method}</span>
-            </div>
-          </div>
-          
-          <div className="flex flex-col sm:flex-row gap-4">
+          <div className="flex flex-col sm:flex-row gap-4 mt-6">
             <button 
               onClick={handleDownloadReceipt}
               className="flex-1 bg-[#232730] hover:bg-[#2A2F3A] text-white font-semibold py-4 rounded-xl transition-all flex items-center justify-center gap-2"
@@ -354,6 +386,13 @@ export function Transfer({ user, balance, onComplete }: { user: string, balance:
           </button>
         </form>
       </div>
+
+      <MfaModal 
+        isOpen={showMfa}
+        onClose={() => setShowMfa(false)}
+        onSuccess={() => handleSubmit()}
+        secret={userData?.twoFactorSecret || ''}
+      />
     </div>
   );
 }

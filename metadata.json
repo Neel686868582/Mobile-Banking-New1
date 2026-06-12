@@ -1,6 +1,6 @@
 {
-  "name": "",
-  "description": "",
+  "name": "RupeePay",
+  "description": "Utility bill payment app",
   "requestFramePermissions": [],
-  "majorCapabilities": []
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

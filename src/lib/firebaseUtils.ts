@@ -1,4 +1,5 @@
 import { db } from './firebase';
+import { formatINR } from './utils';
 import { doc, getDoc, setDoc, updateDoc, collection, addDoc, getDocs, query, orderBy, onSnapshot, deleteDoc } from 'firebase/firestore';
 
 export async function getUserData(uid: string) {
@@ -13,15 +14,25 @@ export function subscribeToUserData(uid: string, callback: (data: any) => void, 
   return onSnapshot(doc(db, 'users', uid), async (snapshot) => {
     if (snapshot.exists()) {
       const data = snapshot.data();
-      if (!data.accountNumber) {
-        data.accountNumber = Math.floor(100000000000 + Math.random() * 900000000000).toString();
-        // Fire and forget to not block the callback
-        updateDoc(doc(db, 'users', uid), { accountNumber: data.accountNumber }).catch(console.error);
-      }
-      if (!data.upiId) {
-        const chars = Math.random().toString(36).substring(2, 8);
-        data.upiId = `${chars}@sbi`;
-        updateDoc(doc(db, 'users', uid), { upiId: data.upiId }).catch(console.error);
+      if (!data.accountNumber || !data.upiId) {
+        // Prevent infinite loop if write fails and rolls back locally
+        if (!(window as any)._isInitializingUser) {
+          (window as any)._isInitializingUser = true;
+          const updates: any = {};
+          if (!data.accountNumber) {
+            updates.accountNumber = Math.floor(100000000000 + Math.random() * 900000000000).toString();
+            data.accountNumber = updates.accountNumber; // optimistically patch
+          }
+          if (!data.upiId) {
+            updates.upiId = `${Math.random().toString(36).substring(2, 8)}@sbi`;
+            data.upiId = updates.upiId; // optimistically patch
+          }
+          updateDoc(doc(db, 'users', uid), updates).catch(console.error);
+        } else {
+          // If already initializing but still missing, just provide local mock to prevent errors
+          if (!data.accountNumber) data.accountNumber = Math.floor(100000000000 + Math.random() * 900000000000).toString();
+          if (!data.upiId) data.upiId = `${Math.random().toString(36).substring(2, 8)}@sbi`;
+        }
       }
       callback({ uid, ...data });
     } else {
@@ -44,7 +55,25 @@ export function subscribeToCollection(uid: string, collectionName: string, callb
   });
 }
 
-export async function doTransfer(uid: string, name: string, amount: number, method: string) {
+export async function addNotification(uid: string, title: string, message: string) {
+  await addDoc(collection(db, 'users', uid, 'notifications'), {
+    title,
+    message,
+    date: new Date().toISOString(),
+    read: false
+  });
+}
+
+export async function markAllNotificationsRead(uid: string, notifications: any[]) {
+  const unreadIds = notifications.filter(n => !n.read).map(n => n.id);
+  for (const id of unreadIds) {
+    if (id) {
+      await updateDoc(doc(db, 'users', uid, 'notifications', id), { read: true });
+    }
+  }
+}
+
+export async function doTransfer(uid: string, name: string, amount: number, method: string, toAcc: string) {
   const numAmount = parseFloat(amount.toString());
   const userRef = doc(db, 'users', uid);
   const userSnap = await getDoc(userRef);
@@ -57,16 +86,21 @@ export async function doTransfer(uid: string, name: string, amount: number, meth
     expenses: (data.expenses || 0) + numAmount
   });
 
-  await addDoc(collection(db, 'users', uid, 'transactions'), {
+  const txRef = await addDoc(collection(db, 'users', uid, 'transactions'), {
     name: `${method} to ${name}`,
     date: new Date().toISOString(),
     amount: numAmount,
     type: 'debit',
-    icon: 'ArrowUpRight'
+    icon: 'ArrowUpRight',
+    toName: name,
+    toAcc: toAcc,
+    method: method
   });
+  await addNotification(uid, 'Transfer Successful', `Successfully transferred ${formatINR(numAmount)} to ${name} via ${method}.`);
+  return txRef.id;
 }
 
-export async function doDeposit(uid: string, amount: number, source: string) {
+export async function doDeposit(uid: string, amount: number, source: string, metadata?: any) {
   const numAmount = parseFloat(amount.toString());
   const userRef = doc(db, 'users', uid);
   const userSnap = await getDoc(userRef);
@@ -78,13 +112,24 @@ export async function doDeposit(uid: string, amount: number, source: string) {
     income: (data.income || 0) + numAmount
   });
 
-  await addDoc(collection(db, 'users', uid, 'transactions'), {
+  const txData: any = {
     name: `Deposit via ${source}`,
     date: new Date().toISOString(),
     amount: numAmount,
     type: 'credit',
-    icon: 'ArrowDownLeft'
-  });
+    icon: 'ArrowDownLeft',
+    toName: 'Self',
+    toAcc: 'Internal',
+    method: source
+  };
+  
+  if (metadata) {
+    txData.metadata = metadata;
+  }
+
+  const txRef = await addDoc(collection(db, 'users', uid, 'transactions'), txData);
+  await addNotification(uid, 'Deposit Successful', `Successfully deposited ${formatINR(numAmount)} via ${source}.`);
+  return txRef.id;
 }
 
 export async function payBill(uid: string, category: string, provider: string, amount: number) {
@@ -100,27 +145,125 @@ export async function payBill(uid: string, category: string, provider: string, a
     expenses: (data.expenses || 0) + numAmount
   });
 
-  await addDoc(collection(db, 'users', uid, 'transactions'), {
+  const txRef = await addDoc(collection(db, 'users', uid, 'transactions'), {
     name: `${category} Bill - ${provider}`,
     date: new Date().toISOString(),
     amount: numAmount,
     type: 'debit',
-    icon: 'FileText'
+    icon: 'FileText',
+    toName: provider,
+    toAcc: `${category} Account`,
+    method: 'Internal Balance'
   });
+  await addNotification(uid, 'Bill Paid', `Successfully paid ${formatINR(numAmount)} for ${category} (${provider}).`);
+  return txRef.id;
 }
 
-export async function createGoal(uid: string, name: string, targetAmount: number, lockMonths: number = 0) {
-  const lockedUntil = lockMonths > 0 ? (Date.now() + lockMonths * 30 * 24 * 60 * 60 * 1000) : null;
+export async function payElectricityBill(uid: string, receiptData: any, amount: number) {
+  const numAmount = parseFloat(amount.toString());
+  const userRef = doc(db, 'users', uid);
+  const userSnap = await getDoc(userRef);
+  if (!userSnap.exists()) throw new Error('User not found');
+  const data = userSnap.data();
+  
+  if (data.balance < numAmount) throw new Error('Insufficient bank balance');
+
+  await updateDoc(userRef, {
+    balance: data.balance - numAmount,
+    expenses: (data.expenses || 0) + numAmount
+  });
+
+  const txRef = await addDoc(collection(db, 'users', uid, 'transactions'), {
+    name: `Electricity Bill - ${receiptData.providerName}`,
+    date: new Date().toISOString(),
+    amount: numAmount,
+    type: 'debit',
+    icon: 'Zap',
+    toName: receiptData.providerName,
+    toAcc: receiptData.consumerNumber,
+    method: receiptData.paymentMethod,
+    // Store specific metadata for receipt rendering in History page
+    electricityBillDetails: {
+      providerName: receiptData.providerName,
+      consumerName: receiptData.consumerName,
+      consumerNumber: receiptData.consumerNumber,
+      billingMonth: receiptData.billingMonth,
+      dueDate: receiptData.dueDate,
+      status: 'Paid'
+    }
+  });
+
+  await addNotification(uid, 'Electricity Bill Paid', `Successfully paid ${formatINR(numAmount)} to ${receiptData.providerName}.`);
+  return txRef.id;
+}
+
+export async function createGoal(
+  uid: string, 
+  name: string, 
+  targetAmount: number, 
+  lockAmount: number, 
+  lockMonths: number, 
+  category: string, 
+  mode: 'strict' | 'flexible'
+) {
+  const lockedUntil = lockMonths > 0 ? new Date(Date.now() + lockMonths * 30 * 24 * 60 * 60 * 1000).toISOString() : null;
+  
+  const baseInterest = 0.04;
+  const strictBonus = mode === 'strict' ? 0.02 : 0;
+  const durationMultiplier = (lockMonths || 0) / 12;
+  const estimatedBonus = parseFloat(lockAmount.toString()) * (baseInterest + strictBonus) * durationMultiplier;
+
+  if (lockAmount > 0) {
+    const userRef = doc(db, 'users', uid);
+    const userSnap = await getDoc(userRef);
+    if (!userSnap.exists()) throw new Error('User not found');
+    const data = userSnap.data();
+    if (data.balance < lockAmount) throw new Error('Insufficient balance to lock initial amount');
+    
+    await updateDoc(userRef, {
+      balance: data.balance - lockAmount
+    });
+    
+    await addDoc(collection(db, 'users', uid, 'transactions'), {
+      name: `Initial Lock: ${name}`,
+      date: new Date().toISOString(),
+      amount: lockAmount,
+      type: 'debit',
+      icon: 'Target',
+      toName: `Goal: ${name}`,
+      toAcc: 'Savings Account',
+      method: lockedUntil ? `Goal Allocation (Locked until ${new Date(lockedUntil).toLocaleDateString()})` : 'Goal Allocation'
+    });
+  }
+
   await addDoc(collection(db, 'users', uid, 'goals'), {
     name,
     targetAmount: parseFloat(targetAmount.toString()),
-    currentAmount: 0,
+    currentAmount: parseFloat(lockAmount.toString()),
     lockedUntil,
-    date: new Date().toISOString()
+    lockMonths,
+    category,
+    mode,
+    date: new Date().toISOString(),
+    bonusEligible: true,
+    estimatedBonus,
+    lastContribution: new Date().toISOString()
   });
+
+  await addNotification(uid, 'Goal Created', `Created saving goal "${name}" with target ${formatINR(targetAmount)}.`);
 }
 
-export async function withdrawGoal(uid: string, goalId: string, currentAmount: number, goalName: string) {
+export async function withdrawGoal(
+  uid: string, 
+  goalId: string, 
+  totalWithdrawn: number, 
+  goalName: string,
+  mode: string,
+  lockedAmount: number,
+  penaltyApplied: number,
+  bonusEarned: number,
+  unlockedEarly: boolean
+) {
   const userRef = doc(db, 'users', uid);
   const userSnap = await getDoc(userRef);
   if (!userSnap.exists()) throw new Error('User not found');
@@ -128,23 +271,33 @@ export async function withdrawGoal(uid: string, goalId: string, currentAmount: n
 
   // Give money back
   await updateDoc(userRef, {
-    balance: data.balance + currentAmount
+    balance: data.balance + totalWithdrawn
   });
 
-  // Remove goal
+  // Instead of deleting, mark it as withdrawn to keep history
   const goalRef = doc(db, 'users', uid, 'goals', goalId);
-  await deleteDoc(goalRef);
+  await updateDoc(goalRef, {
+    status: 'withdrawn',
+    withdrawnAt: new Date().toISOString(),
+    totalWithdrawn,
+    penaltyApplied,
+    bonusEarned,
+    unlockedEarly
+  });
 
-  if (currentAmount > 0) {
-    // add transaction
+  if (totalWithdrawn > 0) {
     await addDoc(collection(db, 'users', uid, 'transactions'), {
       name: `Withdraw Goal: ${goalName}`,
       date: new Date().toISOString(),
-      amount: currentAmount,
+      amount: totalWithdrawn,
       type: 'credit',
-      icon: 'Target'
+      icon: 'Target',
+      toName: 'Self',
+      toAcc: 'Main Balance',
+      method: 'Goal Withdrawal'
     });
   }
+  await addNotification(uid, 'Goal Withdrawn', `Successfully withdrew ${formatINR(totalWithdrawn)} from goal "${goalName}".`);
 }
 
 export async function fundGoal(uid: string, goalId: string, amount: number, currentGoalAmount: number, goalName: string) {
@@ -162,22 +315,53 @@ export async function fundGoal(uid: string, goalId: string, amount: number, curr
 
   // update goal
   const goalRef = doc(db, 'users', uid, 'goals', goalId);
+  const goalSnap = await getDoc(goalRef);
+  if (!goalSnap.exists()) throw new Error('Goal not found');
+  const goalData = goalSnap.data();
+
+  const baseInterest = 0.04;
+  const strictBonus = goalData.mode === 'strict' ? 0.02 : 0;
+  const durationMultiplier = (goalData.lockMonths || 0) / 12;
+  const estimatedBonus = (currentGoalAmount + numAmount) * (baseInterest + strictBonus) * durationMultiplier;
+
   await updateDoc(goalRef, {
-    currentAmount: currentGoalAmount + numAmount
+    currentAmount: currentGoalAmount + numAmount,
+    estimatedBonus
   });
 
-  // add transaction
   await addDoc(collection(db, 'users', uid, 'transactions'), {
     name: `Allocated to Goal: ${goalName}`,
     date: new Date().toISOString(),
     amount: numAmount,
     type: 'debit',
-    icon: 'Target'
+    icon: 'Target',
+    toName: `Goal: ${goalName}`,
+    toAcc: 'Savings Account',
+    method: 'Goal Allocation'
   });
+  await addNotification(uid, 'Goal Funded', `Added ${formatINR(numAmount)} to goal "${goalName}".`);
 }
 
 export async function updateUserProfile(uid: string, updates: any) {
   const userRef = doc(db, 'users', uid);
+  const userSnap = await getDoc(userRef);
+  if (userSnap.exists()) {
+    const current = userSnap.data();
+    const next = { ...current, ...updates };
+    if (next.twoFactorEnabled) {
+      if (next.require2FAForLogin !== false && next.require2FAForTransactions === true) {
+        updates.twoFactorStatus = "For both Login and Transactions";
+      } else if (next.require2FAForLogin !== false) {
+        updates.twoFactorStatus = "For Login only";
+      } else if (next.require2FAForTransactions === true) {
+        updates.twoFactorStatus = "For Transactions only";
+      } else {
+        updates.twoFactorStatus = "Enabled but not active for any action";
+      }
+    } else {
+      updates.twoFactorStatus = "Off";
+    }
+  }
   await updateDoc(userRef, updates);
 }
 

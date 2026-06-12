@@ -3,12 +3,25 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Lock, User, Wallet, Mail } from 'lucide-react';
 import { auth, db } from '../lib/firebase';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
-import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { toast } from 'react-hot-toast';
 
 export function Auth({ onLogin }: { onLogin: (user: any) => void }) {
   const [isLogin, setIsLogin] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [phoneVal, setPhoneVal] = useState('+91 ');
+
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    let val = e.target.value;
+    if (!val.startsWith("+91 ")) {
+      if (val.startsWith("+91")) val = "+91 " + val.slice(3);
+      else if (val.startsWith("+9")) val = "+91 " + val.slice(2);
+      else if (val.startsWith("+")) val = "+91 " + val.slice(1);
+      else val = "+91 " + val;
+    }
+    setPhoneVal(val);
+  };
 
   const handleGoogleSignIn = async () => {
     setLoading(true);
@@ -16,18 +29,20 @@ export function Auth({ onLogin }: { onLogin: (user: any) => void }) {
     try {
       const provider = new GoogleAuthProvider();
       const result = await signInWithPopup(auth, provider);
-      const userDoc = await getDoc(doc(db, 'users', result.user.uid));
+      const emailAsId = result.user.email!;
+      const userDoc = await getDoc(doc(db, 'users', emailAsId));
       
       if (userDoc.exists()) {
         const data = userDoc.data();
         if (!data.accountNumber) {
           data.accountNumber = Math.floor(100000000000 + Math.random() * 900000000000).toString();
-          await setDoc(doc(db, 'users', result.user.uid), data);
+          await setDoc(doc(db, 'users', emailAsId), data);
         }
-        onLogin({ uid: result.user.uid, ...data });
+        toast.success("Login Successful!");
+        onLogin({ uid: emailAsId, ...data });
       } else {
         const newUser = {
-          uid: result.user.uid,
+          uid: emailAsId,
           email: result.user.email,
           name: result.user.displayName || 'User',
           accountNumber: Math.floor(100000000000 + Math.random() * 900000000000).toString(),
@@ -35,9 +50,13 @@ export function Auth({ onLogin }: { onLogin: (user: any) => void }) {
           income: 0,
           expenses: 0,
           isAdmin: result.user.email === 'admin@rupeepay.com' || result.user.email === 'admin@astrabank.com',
-          createdAt: new Date().toISOString()
+          createdAt: new Date().toISOString(),
+          phone: '',
+          twoFactorEnabled: false,
+          twoFactorStatus: 'Off'
         };
-        await setDoc(doc(db, 'users', result.user.uid), newUser);
+        await setDoc(doc(db, 'users', emailAsId), newUser);
+        toast.success("Registration Successful!");
         onLogin(newUser);
       }
     } catch (err: any) {
@@ -61,18 +80,49 @@ export function Auth({ onLogin }: { onLogin: (user: any) => void }) {
     try {
       if (isLogin) {
         const userCredential = await signInWithEmailAndPassword(auth, email, pass);
-        const userDoc = await getDoc(doc(db, 'users', userCredential.user.uid));
+        const emailAsId = userCredential.user.email!;
+        const userDoc = await getDoc(doc(db, 'users', emailAsId));
         if (userDoc.exists()) {
-          onLogin({ uid: userCredential.user.uid, ...userDoc.data() });
+          toast.success("Login Successful!");
+          onLogin({ uid: emailAsId, ...userDoc.data() });
         } else {
           setError('User profile not found.');
         }
       } else {
+        const name = formData.get('name') as string;
+        const phone = formData.get('phone') as string;
+
+        if (phone && phone !== "+91 " && phone.trim() !== '') {
+          const numberPart = phone.replace('+91 ', '').replace(/\s/g, '');
+          if (numberPart.length !== 10) {
+            setError('Please enter a valid 10-digit mobile number.');
+            setLoading(false);
+            return;
+          }
+        }
+
         const userCredential = await createUserWithEmailAndPassword(auth, email, pass);
-        const uid = userCredential.user.uid;
+        const emailAsId = userCredential.user.email!;
+        
+        if (phone && phone !== "+91 " && phone.trim() !== '') {
+          try {
+            const phoneQuery = query(collection(db, 'users'), where('phone', '==', phone));
+            const phoneDocs = await getDocs(phoneQuery);
+            if (!phoneDocs.empty) {
+              // Delete the auth user we just created since phone is duplicate
+              await userCredential.user.delete();
+              setError('Phone number already used by another account.');
+              setLoading(false);
+              return;
+            }
+          } catch (e: any) {
+             console.warn("Could not verify phone uniqueness due to permissions", e);
+             // If rules prevent querying, we must allow registration to proceed
+          }
+        }
         
         const newUser = {
-          uid,
+          uid: emailAsId,
           email,
           name,
           accountNumber: Math.floor(100000000000 + Math.random() * 900000000000).toString(),
@@ -80,11 +130,14 @@ export function Auth({ onLogin }: { onLogin: (user: any) => void }) {
           income: 0,
           expenses: 0,
           isAdmin: email === 'admin@rupeepay.com' || email === 'admin@astrabank.com',
-          createdAt: new Date().toISOString()
+          createdAt: new Date().toISOString(),
+          phone: phone || '',
+          twoFactorEnabled: false,
+          twoFactorStatus: 'Off'
         };
         
-        await setDoc(doc(db, 'users', uid), newUser);
-        
+        await setDoc(doc(db, 'users', emailAsId), newUser);
+        toast.success("Registration Successful!");
         onLogin(newUser);
       }
     } catch (err: any) {
@@ -125,11 +178,23 @@ export function Auth({ onLogin }: { onLogin: (user: any) => void }) {
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: 'auto' }}
                 exit={{ opacity: 0, height: 0 }}
+                className="space-y-5"
               >
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Full Name</label>
-                <div className="relative">
-                  <User className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-600" />
-                  <input required name="name" type="text" className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-3 pl-10 pr-4 focus:border-blue-500 focus:outline-none transition-colors" placeholder="e.g. Arjun Kumar" />
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Full Name</label>
+                  <div className="relative">
+                    <User className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-600" />
+                    <input required name="name" type="text" className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-3 pl-10 pr-4 focus:border-blue-500 focus:outline-none transition-colors" placeholder="e.g. Arjun Kumar" />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Mobile Number</label>
+                  <div className="relative">
+                    <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-600">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+                    </div>
+                    <input required name="phone" type="text" value={phoneVal} onChange={handlePhoneChange} maxLength={14} className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-3 pl-10 pr-4 focus:border-blue-500 focus:outline-none transition-colors" placeholder="+91 98765 43210" />
+                  </div>
                 </div>
               </motion.div>
             )}
