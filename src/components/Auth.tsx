@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Lock, User, Wallet, Mail } from 'lucide-react';
 import { auth, db } from '../lib/firebase';
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, GoogleAuthProvider, signInWithPopup, sendPasswordResetEmail } from 'firebase/auth';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, GoogleAuthProvider, signInWithPopup, sendPasswordResetEmail, fetchSignInMethodsForEmail } from 'firebase/auth';
 import { doc, setDoc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { toast } from 'react-hot-toast';
 
@@ -31,6 +31,18 @@ export function Auth({ onLogin }: { onLogin: (user: any) => void }) {
     setForgotLoading(true);
     try {
       const emailLower = forgotEmail.toLowerCase().trim();
+      
+      try {
+        const methods = await fetchSignInMethodsForEmail(auth, emailLower);
+        if (methods.length === 0) {
+          setForgotError('This email is not registered. Please register first.');
+          setForgotLoading(false);
+          return;
+        }
+      } catch (err: any) {
+         // If enumeration protection blocks fetchSignInMethods, it may fail. 
+         // We'll proceed to the sendPasswordResetEmail just in case if this errors out.
+      }
 
       await sendPasswordResetEmail(auth, emailLower);
       setForgotSuccess('Password reset link has been sent to your email. Please check your inbox.');
