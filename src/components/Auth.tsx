@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Lock, User, Wallet, Mail } from 'lucide-react';
 import { auth, db } from '../lib/firebase';
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, GoogleAuthProvider, signInWithPopup, sendPasswordResetEmail } from 'firebase/auth';
 import { doc, setDoc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { toast } from 'react-hot-toast';
 
@@ -11,6 +11,40 @@ export function Auth({ onLogin }: { onLogin: (user: any) => void }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [phoneVal, setPhoneVal] = useState('+91 ');
+  
+  const [showForgotPass, setShowForgotPass] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotError, setForgotError] = useState('');
+  const [forgotSuccess, setForgotSuccess] = useState('');
+
+  const handleForgotPass = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setForgotError('');
+    setForgotSuccess('');
+    
+    if (!forgotEmail || !forgotEmail.includes('@')) {
+      setForgotError('Please enter a valid email address.');
+      return;
+    }
+
+    setForgotLoading(true);
+    try {
+      const emailLower = forgotEmail.toLowerCase().trim();
+
+      await sendPasswordResetEmail(auth, emailLower);
+      setForgotSuccess('Password reset link has been sent to your email. Please check your inbox.');
+      setForgotEmail('');
+    } catch (err: any) {
+      if (err.code === 'auth/user-not-found') {
+        setForgotError('This email is not registered. Please register first.');
+      } else {
+        setForgotError(err.message || 'Failed to send reset email. Please try again.');
+      }
+    } finally {
+      setForgotLoading(false);
+    }
+  };
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     let val = e.target.value;
@@ -60,7 +94,6 @@ export function Auth({ onLogin }: { onLogin: (user: any) => void }) {
         onLogin(newUser);
       }
     } catch (err: any) {
-      console.error(err);
       setError(err.message || 'Google Sign-In failed.');
     } finally {
       setLoading(false);
@@ -141,7 +174,6 @@ export function Auth({ onLogin }: { onLogin: (user: any) => void }) {
         onLogin(newUser);
       }
     } catch (err: any) {
-      console.error(err);
       if (err.code === 'auth/email-already-in-use') setError('Email is already registered.');
       else if (err.code === 'auth/invalid-credential') setError('Invalid email or password.');
       else setError(err.message || 'Authentication failed. Please try again.');
@@ -214,6 +246,11 @@ export function Auth({ onLogin }: { onLogin: (user: any) => void }) {
               <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-600" />
               <input required name="pass" type="password" className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-3 pl-10 pr-4 focus:border-blue-500 focus:outline-none transition-colors" placeholder="Enter password" />
             </div>
+            {isLogin && (
+              <div className="mt-2 text-right">
+                <button type="button" onClick={() => setShowForgotPass(true)} className="text-sm text-blue-400 hover:text-blue-300 transition-colors">Forgot Password?</button>
+              </div>
+            )}
           </div>
 
           {error && <div className="text-red-400 text-sm text-center">{error}</div>}
@@ -256,6 +293,67 @@ export function Auth({ onLogin }: { onLogin: (user: any) => void }) {
 
 
       </motion.div>
+
+      <AnimatePresence>
+        {showForgotPass && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50"
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-[#16191F] border border-white/10 p-8 rounded-2xl w-full max-w-md shadow-2xl relative"
+            >
+              <button 
+                onClick={() => { setShowForgotPass(false); setForgotError(''); setForgotSuccess(''); }}
+                className="absolute top-4 right-4 text-gray-400 hover:text-white"
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"></path></svg>
+              </button>
+              
+              <h3 className="text-xl font-medium mb-2 text-white">Reset Password</h3>
+              <p className="text-gray-400 text-sm mb-6">Enter your email address and we'll send you a link to reset your password.</p>
+              
+              {forgotSuccess ? (
+                <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-sm p-4 rounded-xl text-center mb-6">
+                  {forgotSuccess}
+                </div>
+              ) : (
+                <form onSubmit={handleForgotPass} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Email Address</label>
+                    <div className="relative">
+                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-600" />
+                      <input 
+                        type="email" 
+                        value={forgotEmail}
+                        onChange={(e) => setForgotEmail(e.target.value)}
+                        required
+                        className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-3 pl-10 pr-4 focus:border-blue-500 focus:outline-none transition-colors text-white" 
+                        placeholder="your@email.com" 
+                      />
+                    </div>
+                  </div>
+                  
+                  {forgotError && <div className="text-red-400 text-sm text-center">{forgotError}</div>}
+                  
+                  <button 
+                    disabled={forgotLoading} 
+                    type="submit" 
+                    className="w-full bg-blue-600 hover:bg-blue-500 text-gray-950 font-semibold py-3 rounded-xl transition-all disabled:opacity-50"
+                  >
+                    {forgotLoading ? 'Sending...' : 'Send Reset Link'}
+                  </button>
+                </form>
+              )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
