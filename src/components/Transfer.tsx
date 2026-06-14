@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { formatINR } from '../lib/utils';
 import { ArrowRightLeft, CheckCircle2, Wallet, UserIcon, Download } from 'lucide-react';
-import { doTransfer } from '../lib/firebaseUtils';
+import { doTransfer, validateUpiId } from '../lib/firebaseUtils';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'react-hot-toast';
 import * as htmlToImage from 'html-to-image';
@@ -18,20 +18,53 @@ export function Transfer({ user, userData, balance, onComplete }: { user: string
   const [method, setMethod] = useState('UPI');
 
   const [isVerified, setIsVerified] = useState(false);
+  const [upiStatus, setUpiStatus] = useState<{ loading: boolean, valid: boolean, message: string }>({ loading: false, valid: false, message: '' });
   const [successData, setSuccessData] = useState<{ amount: number, txId: string, method: string, date: string, toName: string, toAcc: string } | null>(null);
   const [showMfa, setShowMfa] = useState(false);
 
   useEffect(() => {
     if (method === 'UPI') {
-      setIsVerified(acc.length >= 8);
+      if (!acc || !acc.includes('@')) {
+        setIsVerified(false);
+        setUpiStatus({ loading: false, valid: false, message: '' });
+        return;
+      }
+      
+      const checkTimer = setTimeout(async () => {
+        setUpiStatus({ loading: true, valid: false, message: 'Validating UPI ID...' });
+        try {
+          const res = await validateUpiId(acc);
+          if (res) {
+            if (res.upiId === userData?.upiId) {
+               setUpiStatus({ loading: false, valid: false, message: "Cannot transfer to yourself" });
+               setIsVerified(false);
+            } else {
+               setName(res.name);
+               setUpiStatus({ loading: false, valid: true, message: `Verified User` });
+               setIsVerified(true);
+            }
+          } else {
+            setUpiStatus({ loading: false, valid: false, message: 'UPI ID not found' });
+            setIsVerified(false);
+            setName('');
+          }
+        } catch (e) {
+          setUpiStatus({ loading: false, valid: false, message: 'Error checking ID' });
+          setIsVerified(false);
+          setName('');
+        }
+      }, 600);
+      
+      return () => clearTimeout(checkTimer);
     } else {
+      setUpiStatus({ loading: false, valid: false, message: '' });
       if (acc.length >= 9 && acc.length <= 16 && ifsc.length >= 4) {
         setIsVerified(true);
       } else {
         setIsVerified(false);
       }
     }
-  }, [acc, ifsc, method]);
+  }, [acc, ifsc, method, userData?.upiId]);
 
   const quickContacts = [
     { name: 'Mom', acc: '1234567890', ifsc: 'HDFC0001234' },
@@ -245,28 +278,41 @@ export function Transfer({ user, userData, balance, onComplete }: { user: string
             </select>
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Recipient Name</label>
-            <input 
-              required 
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              type="text" 
-              className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-3 px-4 focus:border-blue-500 focus:outline-none transition-colors text-white" 
-              placeholder="e.g. Priya Sharma" 
-            />
-          </div>
+          {method !== 'UPI' && (
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Recipient Name</label>
+              <input 
+                required 
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                type="text" 
+                className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-3 px-4 focus:border-blue-500 focus:outline-none transition-colors text-white" 
+                placeholder="e.g. Priya Sharma" 
+              />
+            </div>
+          )}
           {method === 'UPI' ? (
             <div>
-              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">UPI ID / Mobile Number</label>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Internal UPI ID</label>
               <input 
                 required 
                 value={acc}
                 onChange={(e) => setAcc(e.target.value)}
                 type="text" 
-                className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-3 px-4 focus:border-blue-500 focus:outline-none transition-colors text-white" 
-                placeholder="e.g. 9876543210@upi" 
+                className={`w-full bg-[#0A0B0D] border ${acc.includes('@') && !upiStatus.loading && !isVerified ? 'border-red-500/50' : 'border-white/5'} rounded-xl py-3 px-4 focus:border-blue-500 focus:outline-none transition-colors text-white`} 
+                placeholder="e.g. rahul@rupeepay" 
               />
+              {acc.includes('@') && (
+                <div className="mt-2 text-sm">
+                  {upiStatus.loading ? (
+                    <span className="text-gray-400">Validating UPI ID...</span>
+                  ) : upiStatus.valid ? (
+                    <span className="text-green-400 flex items-center gap-1"><CheckCircle2 className="w-4 h-4" /> Verified User: {name}</span>
+                  ) : (
+                    <span className="text-red-400">✗ Unverified User: {upiStatus.message}</span>
+                  )}
+                </div>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -315,7 +361,7 @@ export function Transfer({ user, userData, balance, onComplete }: { user: string
             )}
           </AnimatePresence>
 
-          <div className="pt-2 border-t border-white/5">
+          <div className={`pt-2 border-t border-white/5 transition-opacity ${method === 'UPI' && !isVerified ? 'opacity-50 pointer-events-none' : ''}`}>
             <div className="flex justify-between items-end mb-2">
               <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">Amount (₹)</label>
             </div>
@@ -328,6 +374,7 @@ export function Transfer({ user, userData, balance, onComplete }: { user: string
               step="0.01" 
               className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-4 px-4 focus:border-blue-500 focus:outline-none transition-colors text-2xl font-bold text-white shadow-inner" 
               placeholder="0.00" 
+              disabled={method === 'UPI' && !isVerified}
             />
           </div>
 
@@ -381,7 +428,7 @@ export function Transfer({ user, userData, balance, onComplete }: { user: string
             </div>
           )}
 
-          <button disabled={loading || numAmount <= 0} type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-gray-950 font-bold py-4 rounded-xl transition-all disabled:opacity-50 text-lg shadow-lg shadow-blue-600/20">
+          <button disabled={loading || numAmount <= 0 || (method === 'UPI' && !isVerified)} type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-gray-950 font-bold py-4 rounded-xl transition-all disabled:opacity-50 text-lg shadow-lg shadow-blue-600/20">
             {loading ? 'Processing...' : (numAmount > 0 ? `Pay ${formatINR(numAmount + currentInfo.fee)}` : 'Enter Amount to Transfer')}
           </button>
         </form>

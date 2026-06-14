@@ -264,20 +264,43 @@ export function Deposit({ user, userData, accountNumber, upiId, balance, transac
               onChange={(e) => setSource(e.target.value)}
               className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-4 px-4 focus:border-blue-500 focus:outline-none transition-colors appearance-none text-white font-medium shadow-inner mb-4"
             >
-              <option value="UPI">UPI (Google Pay, PhonePe, Paytm)</option>
+              <option value="UPI">UPI (Receive via RupeePay)</option>
               <option value="Debit Card">Debit Card</option>
               <option value="Credit Card">Credit Card</option>
             </select>
-            {source === 'UPI' && upiId && (
-              <div className="bg-blue-500/10 border border-blue-500/20 p-4 rounded-xl flex items-center justify-between">
-                <div>
-                  <div className="text-xs text-gray-400 mb-1">Your Personal UPI ID</div>
-                  <div className="font-mono text-blue-400 font-medium tracking-wide">{upiId}</div>
-                </div>
-              </div>
-            )}
-            
-            {source.includes('Card') && (
+          </div>
+          
+          {source === 'UPI' && (
+            <div className="bg-[#0A0B0D] border border-white/5 rounded-2xl p-8 mb-4 flex flex-col items-center justify-center space-y-6">
+               <div className="w-20 h-20 bg-blue-500/10 rounded-2xl flex items-center justify-center">
+                 <ArrowDownToLine className="w-10 h-10 text-blue-400" />
+               </div>
+               <div className="text-center">
+                 <h3 className="text-xl text-white font-medium mb-1">Receive Money</h3>
+                 <p className="text-gray-400 text-sm">
+                   Share your RupeePay UPI ID with other RupeePay users to receive virtual funds instantly.
+                 </p>
+               </div>
+               
+               <div className="bg-[#16191F] border border-blue-500/30 p-5 rounded-xl w-full text-center hover:bg-[#1A1E26] transition-colors">
+                  <div className="text-xs text-blue-400/70 uppercase tracking-widest mb-2 font-semibold">Your Personal UPI ID</div>
+                  <div className="font-mono text-2xl text-blue-400 font-bold tracking-wider">{upiId || 'Loading...'}</div>
+               </div>
+               
+               <div className="flex gap-4 w-full">
+                 <button type="button" onClick={() => {
+                   if (upiId) {
+                     navigator.clipboard.writeText(upiId);
+                     toast.success("UPI ID copied!");
+                   }
+                 }} className="w-full bg-[#232730] hover:bg-[#2A2F3A] border border-white/5 text-white font-medium py-4 rounded-xl transition-all">
+                   Copy ID
+                 </button>
+               </div>
+            </div>
+          )}
+          
+          {source.includes('Card') && (
               <div className="bg-[#0A0B0D] border border-white/5 rounded-2xl p-5 mb-4 relative">
                 {cardType && (
                   <div className="absolute top-4 right-5 text-sm font-semibold text-blue-400">
@@ -342,112 +365,115 @@ export function Deposit({ user, userData, accountNumber, upiId, balance, transac
                 </div>
               </div>
             )}
-          </div>
-          
-          <div>
-            <div className="flex justify-between items-end mb-2">
-              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">Amount (₹)</label>
-            </div>
-            <input 
-              required 
-              name="amount" 
-              type="number" 
-              min="1" 
-              step="0.01" 
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-4 px-4 focus:border-blue-500 focus:outline-none transition-colors text-2xl font-bold text-white shadow-inner" 
-              placeholder="0.00" 
-            />
             
-            {/* 2. Quick Amount Buttons */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3">
-              {quickAmounts.map(val => (
-                <button
-                  key={val}
-                  type="button"
-                  onClick={() => setAmount(val.toString())}
-                  className="bg-blue-600/10 hover:bg-blue-600/20 border border-blue-500/20 text-blue-400 py-2 rounded-lg text-sm font-medium transition-colors"
-                >
-                  +{formatINR(val).replace('.00', '')}
-                </button>
-              ))}
-            </div>
-          </div>
-          
-          <div>
-            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Purpose / Remarks (Optional)</label>
-            <input 
-              name="remarks" 
-              type="text" 
-              value={remarks}
-              onChange={(e) => setRemarks(e.target.value)}
-              className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-3 px-4 focus:border-blue-500 focus:outline-none transition-colors text-gray-300" 
-              placeholder="e.g. Salary, Pocket Money, Savings" 
-            />
-          </div>
+          {source !== 'UPI' && (
+             <>
+               <div>
+                 <div className="flex justify-between items-end mb-2">
+                   <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">Amount (₹)</label>
+                 </div>
+                 <input 
+                   required 
+                   name="amount" 
+                   type="number" 
+                   min="1" 
+                   step="0.01" 
+                   value={amount}
+                   onChange={(e) => setAmount(e.target.value)}
+                   className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-4 px-4 focus:border-blue-500 focus:outline-none transition-colors text-2xl font-bold text-white shadow-inner" 
+                   placeholder="0.00" 
+                 />
+                 
+                 {/* 2. Quick Amount Buttons */}
+                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3">
+                   {quickAmounts.map(val => (
+                     <button
+                       key={val}
+                       type="button"
+                       onClick={() => setAmount(val.toString())}
+                       className="bg-blue-600/10 hover:bg-blue-600/20 border border-blue-500/20 text-blue-400 py-2 rounded-lg text-sm font-medium transition-colors"
+                     >
+                       +{formatINR(val).replace('.00', '')}
+                     </button>
+                   ))}
+                 </div>
+               </div>
+               
+               <div>
+                 <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Purpose / Remarks (Optional)</label>
+                 <input 
+                   name="remarks" 
+                   type="text" 
+                   value={remarks}
+                   onChange={(e) => setRemarks(e.target.value)}
+                   className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-3 px-4 focus:border-blue-500 focus:outline-none transition-colors text-gray-300" 
+                   placeholder="e.g. Salary, Pocket Money, Savings" 
+                 />
+               </div>
 
-          {/* 3 & 4. Transaction Charges & Summary Box */}
-          {numAmount > 0 && (
-            <motion.div 
-              initial={{ opacity: 0, height: 0 }} 
-              animate={{ opacity: 1, height: 'auto' }} 
-              className="bg-[#0A0B0D] border border-white/5 rounded-2xl p-5 overflow-hidden"
-            >
-              <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4 border-b border-white/5 pb-2">Deposit Summary</h4>
-              <div className="space-y-3 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Amount to add</span>
-                  <span className="text-white font-medium">{formatINR(numAmount)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Method</span>
-                  <span className="text-white">{source}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Processing Time</span>
-                  <span className="text-green-400">{currentInfo.time}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Charges</span>
-                  <span className={currentInfo.fee === 0 ? "text-green-400" : "text-orange-400"}>
-                    {currentInfo.fee === 0 ? '₹0 (Free)' : `₹${currentInfo.fee}`}
-                  </span>
-                </div>
-                <div className="flex justify-between border-t border-white/5 pt-3 mt-1 font-semibold">
-                  <span className="text-white">Total Deducted</span>
-                  <span className="text-white text-lg">{formatINR(numAmount + currentInfo.fee)}</span>
-                </div>
-              </div>
-            </motion.div>
+               {/* 3 & 4. Transaction Charges & Summary Box */}
+               {numAmount > 0 && (
+                 <motion.div 
+                   initial={{ opacity: 0, height: 0 }} 
+                   animate={{ opacity: 1, height: 'auto' }} 
+                   className="bg-[#0A0B0D] border border-white/5 rounded-2xl p-5 overflow-hidden"
+                 >
+                   <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4 border-b border-white/5 pb-2">Deposit Summary</h4>
+                   <div className="space-y-3 text-sm">
+                     <div className="flex justify-between">
+                       <span className="text-gray-400">Amount to add</span>
+                       <span className="text-white font-medium">{formatINR(numAmount)}</span>
+                     </div>
+                     <div className="flex justify-between">
+                       <span className="text-gray-400">Method</span>
+                       <span className="text-white">{source}</span>
+                     </div>
+                     <div className="flex justify-between">
+                       <span className="text-gray-400">Processing Time</span>
+                       <span className="text-green-400">{currentInfo.time}</span>
+                     </div>
+                     <div className="flex justify-between">
+                       <span className="text-gray-400">Charges</span>
+                       <span className={currentInfo.fee === 0 ? "text-green-400" : "text-orange-400"}>
+                         {currentInfo.fee === 0 ? '₹0 (Free)' : `₹${currentInfo.fee}`}
+                       </span>
+                     </div>
+                     <div className="flex justify-between border-t border-white/5 pt-3 mt-1 font-semibold">
+                       <span className="text-white">Total Deducted</span>
+                       <span className="text-white text-lg">{formatINR(numAmount + currentInfo.fee)}</span>
+                     </div>
+                   </div>
+                 </motion.div>
+               )}
+
+               {msg.text && (
+                 <div className={`p-4 rounded-xl text-sm ${msg.type === 'error' ? 'bg-red-500/10 text-red-400 border border-red-500/50' : 'bg-blue-600/10 text-blue-400 border border-blue-500/50'}`}>
+                   {msg.text}
+                 </div>
+               )}
+
+               <div className="flex gap-4">
+                 <button 
+                   type="button" 
+                   onClick={() => {
+                     setAmount('');
+                     setSource('UPI');
+                     setRemarks('');
+                   }}
+                   className="flex-1 bg-[#232730] hover:bg-[#2A2F3A] text-white font-semibold py-4 rounded-xl transition-all border border-transparent"
+                 >
+                   Cancel
+                 </button>
+                 <button 
+                   disabled={loading || numAmount <= 0 || !isCardFormValid} 
+                   type="submit" 
+                   className="flex-[2] bg-blue-600/90 hover:bg-blue-600 text-white font-semibold py-4 rounded-xl transition-all shadow-[0_0_20px_rgba(37,99,235,0.2)] disabled:opacity-50"
+                 >
+                   {loading ? 'Processing...' : (numAmount > 0 ? `Proceed to Pay ${formatINR(numAmount + currentInfo.fee)}` : 'Enter Amount')}
+                 </button>
+               </div>
+             </>
           )}
-
-          {msg.text && (
-            <div className={`p-4 rounded-xl text-sm ${msg.type === 'error' ? 'bg-red-500/10 text-red-400 border border-red-500/50' : 'bg-blue-600/10 text-blue-400 border border-blue-500/50'}`}>
-              {msg.text}
-            </div>
-          )}
-
-          <div className="flex gap-4">
-            <button 
-              type="button" 
-              onClick={() => {
-                setAmount('');
-                setSource('UPI');
-                setRemarks('');
-              }}
-              className="flex-1 bg-[#232730] hover:bg-[#2A2F3A] text-white font-semibold py-4 rounded-xl transition-all border border-transparent"
-            >
-              Cancel
-            </button>
-            <button 
-              disabled={loading || numAmount <= 0 || !isCardFormValid} 
-              type="submit" 
-              className="flex-[2] bg-blue-600/90 hover:bg-blue-600 text-white font-semibold py-4 rounded-xl transition-all shadow-[0_0_20px_rgba(37,99,235,0.2)] disabled:opacity-50"
-            >
-              {loading ? 'Processing...' : (numAmount > 0 ? `Proceed to Pay ${formatINR(numAmount + currentInfo.fee)}` : 'Enter Amount')}
-            </button>
-          </div>
         </form>
       </div>
 

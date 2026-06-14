@@ -1,6 +1,6 @@
 import { db } from './firebase';
 import { formatINR } from './utils';
-import { doc, getDoc, setDoc, updateDoc, collection, addDoc, getDocs, query, orderBy, onSnapshot, deleteDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, collection, addDoc, getDocs, query, orderBy, onSnapshot, deleteDoc, where, writeBatch, runTransaction } from 'firebase/firestore';
 
 export async function getUserData(uid: string) {
   const userDoc = await getDoc(doc(db, 'users', uid));
@@ -14,7 +14,7 @@ export function subscribeToUserData(uid: string, callback: (data: any) => void, 
   return onSnapshot(doc(db, 'users', uid), async (snapshot) => {
     if (snapshot.exists()) {
       const data = snapshot.data();
-      if (!data.accountNumber || !data.upiId) {
+      if (!data.accountNumber || !data.upiId || data.upiId.endsWith('@sbi')) {
         // Prevent infinite loop if write fails and rolls back locally
         if (!(window as any)._isInitializingUser) {
           (window as any)._isInitializingUser = true;
@@ -23,15 +23,37 @@ export function subscribeToUserData(uid: string, callback: (data: any) => void, 
             updates.accountNumber = Math.floor(100000000000 + Math.random() * 900000000000).toString();
             data.accountNumber = updates.accountNumber; // optimistically patch
           }
-          if (!data.upiId) {
-            updates.upiId = `${Math.random().toString(36).substring(2, 8)}@sbi`;
-            data.upiId = updates.upiId; // optimistically patch
+          if (!data.upiId || data.upiId.endsWith('@sbi')) {
+             (async () => {
+                 let baseName = (data.email || 'user').split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '');
+                 if (!baseName) baseName = `user${Math.floor(Math.random()*10000)}`;
+                 let upiIdStr = `${baseName}@rupeepay`;
+                 let isUnique = false;
+                 for(let i=0; i<5; i++) {
+                     const q = query(collection(db, 'users'), where('upiId', '==', upiIdStr));
+                     const docs = await getDocs(q);
+                     if (docs.empty) {
+                        isUnique = true; break;
+                     }
+                     upiIdStr = `${baseName}${Math.floor(Math.random() * 10000)}@rupeepay`;
+                 }
+                 if (!isUnique) upiIdStr = `${baseName}${Date.now().toString().substring(6)}@rupeepay`;
+                 try {
+                   await updateDoc(doc(db, 'users', uid), { upiId: upiIdStr });
+                 } catch (err) {
+                   console.error("Failed to assign upiId", err);
+                 }
+             })();
+             // optimistically patch so UI doesn't crash until real fetch completes
+             data.upiId = `${(data.name || 'user').toLowerCase().replace(/[^a-z0-9]/g, '')}@rupeepay`;
           }
-          updateDoc(doc(db, 'users', uid), updates).catch(console.error);
+          if (Object.keys(updates).length > 0) {
+            updateDoc(doc(db, 'users', uid), updates).catch(console.error);
+          }
         } else {
           // If already initializing but still missing, just provide local mock to prevent errors
           if (!data.accountNumber) data.accountNumber = Math.floor(100000000000 + Math.random() * 900000000000).toString();
-          if (!data.upiId) data.upiId = `${Math.random().toString(36).substring(2, 8)}@sbi`;
+          if (!data.upiId || data.upiId.endsWith('@sbi')) data.upiId = `${(data.name || 'user').toLowerCase().replace(/[^a-z0-9]/g, '')}@rupeepay`;
         }
       }
       callback({ uid, ...data });
@@ -45,9 +67,18 @@ export function subscribeToUserData(uid: string, callback: (data: any) => void, 
 }
 
 // Subscribe to subcollections
-export function subscribeToCollection(uid: string, collectionName: string, callback: (data: any[]) => void, onError?: (err: any) => void) {
+export function subscribeToCollection(uid: string, collectionName: string, callback: (data: any[]) => void, onError?: (err: any) => void, onAdded?: (data: any) => void) {
   const q = query(collection(db, 'users', uid, collectionName), orderBy('date', 'desc'));
+  let isFirstLoad = true;
   return onSnapshot(q, (snapshot) => {
+    if (onAdded) {
+      snapshot.docChanges().forEach(change => {
+        if (change.type === 'added' && !isFirstLoad) {
+           onAdded({ id: change.doc.id, ...change.doc.data() });
+        }
+      });
+    }
+    isFirstLoad = false;
     callback(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
   }, (err) => {
     console.error(`Error fetching collection ${collectionName}:`, err);
@@ -73,8 +104,100 @@ export async function markAllNotificationsRead(uid: string, notifications: any[]
   }
 }
 
+export async function validateUpiId(upiId: string) {
+  const q = query(collection(db, 'users'), where('upiId', '==', upiId.trim().toLowerCase()));
+  const snap = await getDocs(q);
+  if (snap.empty) return null;
+  const data = snap.docs[0].data();
+  return { uid: snap.docs[0].id, name: data.name, upiId: data.upiId };
+}
+
 export async function doTransfer(uid: string, name: string, amount: number, method: string, toAcc: string) {
   const numAmount = parseFloat(amount.toString());
+
+  if (method === 'UPI' && toAcc.toLowerCase().endsWith('@rupeepay')) {
+    // Internal RupeePay UPI Transfer
+    let internalTxId = '';
+    await runTransaction(db, async (transaction) => {
+      const senderRef = doc(db, 'users', uid);
+      const senderSnap = await transaction.get(senderRef);
+      if (!senderSnap.exists()) throw new Error('Sender not found');
+      
+      const senderData = senderSnap.data();
+      if (senderData.balance < numAmount) throw new Error('Insufficient balance');
+
+      // Find recipient
+      const q = query(collection(db, 'users'), where('upiId', '==', toAcc.toLowerCase()));
+      const recipientSnaps = await getDocs(q); // getDocs inside transaction is generally okay if not modifying queried collection structure
+      if (recipientSnaps.empty) throw new Error('Recipient UPI ID not found');
+      
+      const recipientDoc = recipientSnaps.docs[0];
+      const recipientId = recipientDoc.id;
+      if (recipientId === uid) throw new Error('Cannot transfer to yourself');
+
+      const recipientRef = doc(db, 'users', recipientId);
+      const recipientSnap = await transaction.get(recipientRef);
+      const recipientData = recipientSnap.data();
+
+      // Write deductions
+      transaction.update(senderRef, {
+        balance: senderData.balance - numAmount,
+        expenses: (senderData.expenses || 0) + numAmount
+      });
+
+      // Write additions
+      transaction.update(recipientRef, {
+        balance: (recipientData.balance || 0) + numAmount,
+        income: (recipientData.income || 0) + numAmount
+      });
+
+      // Transaction docs
+      const senderTxRef = doc(collection(db, 'users', uid, 'transactions'));
+      transaction.set(senderTxRef, {
+        name: `Transfer to ${recipientData.name}`,
+        date: new Date().toISOString(),
+        amount: numAmount,
+        type: 'debit',
+        icon: 'ArrowUpRight',
+        toName: recipientData.name,
+        toAcc: toAcc,
+        method: method
+      });
+      internalTxId = senderTxRef.id;
+
+      const recipientTxRef = doc(collection(db, 'users', recipientId, 'transactions'));
+      transaction.set(recipientTxRef, {
+        name: `Received from ${senderData.name}`,
+        date: new Date().toISOString(),
+        amount: numAmount,
+        type: 'credit',
+        icon: 'ArrowDownLeft',
+        fromName: senderData.name,
+        fromAcc: senderData.upiId || 'Unknown',
+        method: method
+      });
+
+      // Notifications
+      const senderNotifRef = doc(collection(db, 'users', uid, 'notifications'));
+      transaction.set(senderNotifRef, {
+        title: 'Transfer Successful',
+        message: `${formatINR(numAmount)} sent to ${recipientData.name}.`,
+        date: new Date().toISOString(),
+        read: false
+      });
+
+      const recipientNotifRef = doc(collection(db, 'users', recipientId, 'notifications'));
+      transaction.set(recipientNotifRef, {
+        title: 'Amount Received',
+        message: `${formatINR(numAmount)} received from ${senderData.name}.`,
+        date: new Date().toISOString(),
+        read: false
+      });
+    });
+    return internalTxId;
+  }
+
+  // External Transfer
   const userRef = doc(db, 'users', uid);
   const userSnap = await getDoc(userRef);
   if (!userSnap.exists()) throw new Error('User not found');

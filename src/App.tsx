@@ -71,7 +71,15 @@ export default function App() {
 
     const unsubTx = subscribeToCollection(user.uid, 'transactions', setTransactions, (err) => setAuthError("Failed to fetch transactions."));
     const unsubGoals = subscribeToCollection(user.uid, 'goals', setGoals, (err) => setAuthError("Failed to fetch goals."));
-    const unsubNotifs = subscribeToCollection(user.uid, 'notifications', setNotifications, (err) => setAuthError("Failed to fetch notifications."));
+    const unsubNotifs = subscribeToCollection(
+      user.uid, 
+      'notifications', 
+      setNotifications, 
+      (err) => setAuthError("Failed to fetch notifications."),
+      (newNotif) => {
+        toast.success(newNotif.message);
+      }
+    );
 
     return () => {
       unsubUser();
