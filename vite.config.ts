@@ -19,6 +19,12 @@ export default defineConfig(({mode}) => {
       open: true,
       browser: 'firefox',
       hmr: false,
+      proxy: {
+        '/api': {
+          target: 'http://localhost:3000',
+          changeOrigin: true,
+        }
+      }
     },
   };
 });
