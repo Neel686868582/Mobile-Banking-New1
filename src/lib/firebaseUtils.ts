@@ -387,8 +387,8 @@ export async function doTransfer(uid: string, name: string, amount: number, meth
       // Global UPI Transfers Record (Only for UPI for now to not break existing, or we can make a global transfers table)
       if (isInternalUpi) {
         const globalTxRef = doc(collection(db, 'upi_transfers'));
-        transaction.set(globalTxRef, { transactionId: generateId('TXN'),
-          transactionId: senderTxRef.id,
+        transaction.set(globalTxRef, { 
+          transactionId: internalTxId,
           amount: numAmount,
           senderUid: uid,
           senderName: senderData.name,
