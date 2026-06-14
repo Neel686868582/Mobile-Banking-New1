@@ -4,7 +4,7 @@ import { Zap, Search, FileText, CheckCircle2, Download, CreditCard, Wallet, Smar
 import { toast } from 'react-hot-toast';
 import { jsPDF } from "jspdf";
 import { payElectricityBill } from '../lib/firebaseUtils';
-import { CardForm } from './CardForm';
+import { MfaModal } from './MfaModal';
 
 const ELECTRICITY_PROVIDERS = [
   "MGVCL", "DGVCL", "UGVCL", "PGVCL", "Torrent Power", "MSEDCL (Mahavitaran)", 
@@ -33,18 +33,17 @@ const PROVIDER_LENGTHS: Record<string, { min: number, max: number }> = {
   "KSEB": { min: 13, max: 13 }
 };
 
-export function ElectricityBill({ user, balance, onComplete }: { user: string, balance: number, onComplete: () => void }) {
+export function ElectricityBill({ user, userData, balance, onComplete }: { user: string, userData?: any, balance: number, onComplete: () => void }) {
   const [step, setStep] = useState(1);
   const [providerSearch, setProviderSearch] = useState('');
   const [selectedProvider, setSelectedProvider] = useState('');
   const [consumerNumber, setConsumerNumber] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showMfa, setShowMfa] = useState(false);
   
   const [billDetails, setBillDetails] = useState<any>(null);
   
   const [paymentMethod, setPaymentMethod] = useState('');
-  const [isCardValid, setIsCardValid] = useState(false);
-  const [maskedCard, setMaskedCard] = useState('');
   
   const [receiptData, setReceiptData] = useState<any>(null);
 
@@ -89,15 +88,19 @@ const INDIAN_NAMES = ["Rajesh Kumar", "Amit Singh", "Priya Sharma", "Ravi Patel"
     }, 1500);
   };
 
-  const handlePayment = async () => {
+  const handlePayment = async (forceNoMfa = false) => {
     if (!paymentMethod) {
       toast.error('Please select a payment method');
       return;
     }
     
-    const isCard = paymentMethod === 'Debit Card' || paymentMethod === 'Credit Card';
-    if (isCard && !isCardValid) {
-      toast.error('Please provide valid card details.');
+    if (!userData?.twoFactorEnabled) {
+      toast.error('Please enable Two-Factor Authentication (2FA) to proceed with payments.', { duration: 5000 });
+      return;
+    }
+
+    if (!forceNoMfa) {
+      setShowMfa(true);
       return;
     }
     
@@ -106,7 +109,7 @@ const INDIAN_NAMES = ["Rajesh Kumar", "Amit Singh", "Priya Sharma", "Ravi Patel"
       const receipt = {
         ...billDetails,
         status: 'Paid',
-        paymentMethod: isCard ? `${paymentMethod} ${maskedCard}` : paymentMethod,
+        paymentMethod: paymentMethod === 'Virtual Debit Card' && userData?.virtualCard ? `Virtual Debit Card (**** ${userData.virtualCard.cardNumber.slice(-4)})` : paymentMethod,
         date: new Date().toLocaleString(),
       };
       
@@ -116,9 +119,11 @@ const INDIAN_NAMES = ["Rajesh Kumar", "Amit Singh", "Priya Sharma", "Ravi Patel"
       
       setReceiptData({ ...receipt, txId });
       setStep(3);
+      setShowMfa(false);
       toast.success("Payment successful!");
     } catch (err: any) {
       toast.error(err.message || 'Payment failed');
+      setShowMfa(false);
     } finally {
       setLoading(false);
     }
@@ -249,8 +254,9 @@ const INDIAN_NAMES = ["Rajesh Kumar", "Amit Singh", "Priya Sharma", "Ravi Patel"
 
   if (step === 2 && billDetails) {
     return (
-      <div className="bg-[#16191F] border border-white/5 rounded-3xl p-8 shadow-xl space-y-6">
-        <h3 className="text-xl font-medium flex items-center gap-2 border-b border-white/5 pb-4"><FileText className="text-blue-400"/> Bill Details</h3>
+      <>
+        <div className="bg-[#16191F] border border-white/5 rounded-3xl p-8 shadow-xl space-y-6">
+          <h3 className="text-xl font-medium flex items-center gap-2 border-b border-white/5 pb-4"><FileText className="text-blue-400"/> Bill Details</h3>
         
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-[#0A0B0D] p-6 rounded-2xl">
           <div>
@@ -288,13 +294,14 @@ const INDIAN_NAMES = ["Rajesh Kumar", "Amit Singh", "Priya Sharma", "Ravi Patel"
 
         <div className="pt-4 border-t border-white/5 space-y-4">
           <label className="block text-sm font-semibold text-gray-400 uppercase tracking-wider">Select Payment Method</label>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {[
+              { id: 'RupeePay Balance', icon: Wallet, label: 'RupeePay Balance' },
               { id: 'UPI', icon: Smartphone, label: 'UPI' },
-              { id: 'Debit Card', icon: CreditCard, label: 'Debit Card' },
-              { id: 'Credit Card', icon: CreditCard, label: 'Credit Card' }
+              { id: 'Virtual Debit Card', icon: CreditCard, label: 'Virtual Debit Card' }
             ].map(method => (
               <button
+                type="button"
                 key={method.id}
                 onClick={() => setPaymentMethod(method.id)}
                 className={`p-4 rounded-xl border flex flex-col items-center gap-2 transition-all ${paymentMethod === method.id ? 'bg-blue-600/10 border-blue-500 text-blue-400' : 'bg-[#0A0B0D] border-white/5 text-gray-400 hover:text-white'}`}
@@ -304,21 +311,24 @@ const INDIAN_NAMES = ["Rajesh Kumar", "Amit Singh", "Priya Sharma", "Ravi Patel"
               </button>
             ))}
           </div>
-          
-          {(paymentMethod === 'Debit Card' || paymentMethod === 'Credit Card') && (
-            <CardForm onValidData={(valid, masked) => { setIsCardValid(valid); setMaskedCard(masked); }} />
-          )}
         </div>
 
         <div className="flex gap-4 pt-4">
-          <button onClick={() => setStep(1)} className="flex-1 bg-[#232730] hover:bg-[#2A2F3A] text-white font-semibold py-4 rounded-xl transition-all">
+          <button type="button" onClick={() => setStep(1)} className="flex-1 bg-[#232730] hover:bg-[#2A2F3A] text-white font-semibold py-4 rounded-xl transition-all">
             Cancel
           </button>
-          <button disabled={loading || ((paymentMethod === 'Debit Card' || paymentMethod === 'Credit Card') && !isCardValid)} onClick={handlePayment} className="flex-1 bg-blue-600 hover:bg-blue-500 text-gray-950 font-semibold py-4 rounded-xl transition-all disabled:opacity-50">
+          <button type="button" disabled={loading || !paymentMethod} onClick={() => handlePayment(false)} className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-semibold py-4 rounded-xl transition-all disabled:opacity-50 shadow-[0_0_20px_rgba(37,99,235,0.2)]">
             {loading ? 'Processing...' : `Pay ${formatINR(billDetails.billAmount)} Now`}
           </button>
         </div>
       </div>
+      <MfaModal 
+        isOpen={showMfa}
+        onClose={() => setShowMfa(false)}
+        onSuccess={() => handlePayment(true)}
+        secret={userData?.twoFactorSecret || ''}
+      />
+      </>
     );
   }
 
@@ -373,6 +383,12 @@ const INDIAN_NAMES = ["Rajesh Kumar", "Amit Singh", "Priya Sharma", "Ravi Patel"
           {loading ? 'Fetching Details...' : <><Search className="w-5 h-5"/> Fetch Bill</>}
         </button>
       </form>
+      <MfaModal 
+        isOpen={showMfa}
+        onClose={() => setShowMfa(false)}
+        onSuccess={() => handlePayment(true)}
+        secret={userData?.twoFactorSecret || ''}
+      />
     </div>
   );
 }

@@ -5,7 +5,6 @@ import { payBill } from '../lib/firebaseUtils';
 import { toast } from 'react-hot-toast';
 import { ElectricityBill } from './ElectricityBill';
 import { jsPDF } from "jspdf";
-import { CardForm } from './CardForm';
 import { MfaModal } from './MfaModal';
 
 const billTypes = [
@@ -41,8 +40,6 @@ export function Bills({ user, userData, balance, onComplete }: { user: string, u
   const [step, setStep] = useState(1);
   const [billDetails, setBillDetails] = useState<any>(null);
   const [paymentMethod, setPaymentMethod] = useState('');
-  const [isCardValid, setIsCardValid] = useState(false);
-  const [maskedCard, setMaskedCard] = useState('');
   
   const [receiptData, setReceiptData] = useState<any>(null);
   
@@ -54,8 +51,6 @@ export function Bills({ user, userData, balance, onComplete }: { user: string, u
     setStep(1);
     setBillDetails(null);
     setPaymentMethod('');
-    setIsCardValid(false);
-    setMaskedCard('');
   };
 
   const handleFetch = (e: React.FormEvent) => {
@@ -115,10 +110,14 @@ const INDIAN_NAMES = ["Rajesh Kumar", "Amit Singh", "Priya Sharma", "Ravi Patel"
       toast.error('Please select a payment method.');
       return;
     }
-    
-    const isCard = paymentMethod === 'Debit Card' || paymentMethod === 'Credit Card';
-    if (isCard && !isCardValid) {
-      toast.error('Please provide valid card details.');
+
+    if (!userData?.twoFactorEnabled) {
+      toast.error('Please enable Two-Factor Authentication (2FA) to proceed with payments.', { duration: 5000 });
+      return;
+    }
+
+    if (!forceNoMfa) {
+      setShowMfa(true);
       return;
     }
 
@@ -136,7 +135,7 @@ const INDIAN_NAMES = ["Rajesh Kumar", "Amit Singh", "Priya Sharma", "Ravi Patel"
 
     setLoading(true);
     try {
-      const txId = await payBill(user, category, provider, billAmount);
+      const txId = await payBill(user, category, provider, billAmount, paymentMethod);
       
       await new Promise(r => setTimeout(r, 2000));
       
@@ -149,7 +148,7 @@ const INDIAN_NAMES = ["Rajesh Kumar", "Amit Singh", "Priya Sharma", "Ravi Patel"
         identifier: identifier,
         amount: billAmount,
         date: new Date().toLocaleString(),
-        paymentMethod: isCard ? `${paymentMethod} ${maskedCard}` : paymentMethod,
+        paymentMethod: paymentMethod === 'Virtual Debit Card' && userData?.virtualCard ? `Virtual Debit Card (**** ${userData.virtualCard.cardNumber.slice(-4)})` : paymentMethod,
         status: 'Paid'
       });
       setStep(3);
@@ -301,7 +300,7 @@ const INDIAN_NAMES = ["Rajesh Kumar", "Amit Singh", "Priya Sharma", "Ravi Patel"
 
         <div className="md:col-span-2">
           {selectedType === 'electricity' ? (
-            <ElectricityBill user={user} balance={balance} onComplete={onComplete} />
+            <ElectricityBill user={user} userData={userData} balance={balance} onComplete={onComplete} />
           ) : step === 3 && receiptData ? (
             <div className="bg-[#16191F] border border-white/5 rounded-3xl p-8 shadow-xl text-center space-y-6">
               <div className="w-20 h-20 bg-green-500/20 text-green-500 rounded-full flex items-center justify-center mx-auto mb-6">
@@ -408,13 +407,14 @@ const INDIAN_NAMES = ["Rajesh Kumar", "Amit Singh", "Priya Sharma", "Ravi Patel"
 
               <div className="pt-4 border-t border-white/5 space-y-4">
                 <label className="block text-sm font-semibold text-gray-400 uppercase tracking-wider">Select Payment Method</label>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   {[
+                    { id: 'RupeePay Balance', icon: Wallet, label: 'RupeePay Balance' },
                     { id: 'UPI', icon: Smartphone, label: 'UPI' },
-                    { id: 'Debit Card', icon: CreditCard, label: 'Debit Card' },
-                    { id: 'Credit Card', icon: CreditCard, label: 'Credit Card' }
+                    { id: 'Virtual Debit Card', icon: CreditCard, label: 'Virtual Debit Card' }
                   ].map(method => (
                     <button
+                      type="button"
                       key={method.id}
                       onClick={() => setPaymentMethod(method.id)}
                       className={`p-4 rounded-xl border flex flex-col items-center gap-2 transition-all ${paymentMethod === method.id ? 'bg-blue-600/10 border-blue-500 text-blue-400' : 'bg-[#0A0B0D] border-white/5 text-gray-400 hover:text-white'}`}
@@ -424,17 +424,13 @@ const INDIAN_NAMES = ["Rajesh Kumar", "Amit Singh", "Priya Sharma", "Ravi Patel"
                     </button>
                   ))}
                 </div>
-                
-                {(paymentMethod === 'Debit Card' || paymentMethod === 'Credit Card') && (
-                  <CardForm onValidData={(valid, masked) => { setIsCardValid(valid); setMaskedCard(masked); }} />
-                )}
               </div>
 
               <div className="flex gap-4 pt-4">
-                <button onClick={() => setStep(1)} className="flex-1 bg-[#232730] hover:bg-[#2A2F3A] text-white font-semibold py-4 rounded-xl transition-all">
+                <button type="button" onClick={() => setStep(1)} className="flex-1 bg-[#232730] hover:bg-[#2A2F3A] text-white font-semibold py-4 rounded-xl transition-all">
                   Cancel
                 </button>
-                <button disabled={loading || (selectedType === 'mobile' && !billDetails.billAmount) || ((paymentMethod === 'Debit Card' || paymentMethod === 'Credit Card') && !isCardValid)} onClick={handlePayment} className="flex-1 bg-blue-600 hover:bg-blue-500 text-gray-950 font-semibold py-4 rounded-xl transition-all disabled:opacity-50">
+                <button type="button" disabled={loading || (selectedType === 'mobile' && !billDetails.billAmount) || !paymentMethod} onClick={() => handlePayment(false)} className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-semibold py-4 rounded-xl transition-all disabled:opacity-50 shadow-[0_0_20px_rgba(37,99,235,0.2)]">
                   {loading ? 'Processing...' : (selectedType === 'mobile' && !billDetails.billAmount ? 'Enter Amount' : `Pay ${formatINR(billDetails.billAmount)} Now`)}
                 </button>
               </div>

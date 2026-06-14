@@ -1,11 +1,13 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { formatINR } from '../lib/utils';
 import { ArrowDownToLine, CheckCircle2, FileText, Download, Wallet, CreditCard } from 'lucide-react';
-import { doDeposit } from '../lib/firebaseUtils';
+import { doDeposit, validateVirtualDebitCardId, requestCardDepositAuth, submitCardDepositAuth } from '../lib/firebaseUtils';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'react-hot-toast';
 import * as htmlToImage from 'html-to-image';
 import { MfaModal } from './MfaModal';
+import { db } from '../lib/firebase';
+import { doc, onSnapshot } from 'firebase/firestore';
 
 export function Deposit({ user, userData, accountNumber, upiId, balance, transactions, onComplete }: { user: string, userData?: any, accountNumber?: string, upiId?: string, balance: number, transactions: any[], onComplete: () => void }) {
   const [loading, setLoading] = useState(false);
@@ -15,13 +17,19 @@ export function Deposit({ user, userData, accountNumber, upiId, balance, transac
   const [source, setSource] = useState<string>('UPI');
   const [remarks, setRemarks] = useState<string>('');
   
-  const [cardNumber, setCardNumber] = useState('');
-  const [cardName, setCardName] = useState('');
-  const [cardExpiry, setCardExpiry] = useState('');
-  const [cardCVV, setCardCVV] = useState('');
+  const [cardId, setCardId] = useState('');
   
   const [successData, setSuccessData] = useState<{ amount: number, txId: string, method: string, date: string, last4?: string } | null>(null);
   const [showMfa, setShowMfa] = useState(false);
+
+  const [authRequestId, setAuthRequestId] = useState<string | null>(null);
+  const [targetUserId, setTargetUserId] = useState<string | null>(null);
+  const [targetName, setTargetName] = useState<string | null>(null);
+  const [cardNetwork, setCardNetwork] = useState<string>('');
+  const [cardLast4, setCardLast4] = useState<string>('');
+  const [authCode, setAuthCode] = useState('');
+  const [showAuthCodeModal, setShowAuthCodeModal] = useState(false);
+  const [cardValidationStatus, setCardValidationStatus] = useState<{ isChecking: boolean, error?: string, verifiedTargetName?: string }>({ isChecking: false });
 
   const lastDeposit = transactions?.find(t => t.type === 'credit');
   const quickAmounts = [500, 1000, 5000, 10000];
@@ -30,7 +38,6 @@ export function Deposit({ user, userData, accountNumber, upiId, balance, transac
     switch(method) {
       case 'UPI': return { time: 'Instant', fee: 0 };
       case 'Debit Card': return { time: 'Instant', fee: 12 };
-      case 'Credit Card': return { time: 'Instant', fee: 20 };
       default: return { time: 'Instant', fee: 0 };
     }
   };
@@ -38,63 +45,70 @@ export function Deposit({ user, userData, accountNumber, upiId, balance, transac
   const currentInfo = getChargesInfo(source);
   const numAmount = Number(amount) || 0;
 
-  const cleanCardNumber = cardNumber.replace(/\s+/g, '');
-  
-  const detectCardType = (number: string) => {
-    const num = number.replace(/\s+/g, '');
-    if (num.startsWith('4')) return 'Visa';
-    if (/^5[1-5]/.test(num)) return 'Mastercard';
-    if (/^6(0|5)/.test(num)) return 'RuPay';
-    if (/^3[47]/.test(num)) return 'American Express';
-    return '';
-  };
-  
-  const cardType = detectCardType(cardNumber);
+  const isCardFormValid = source === 'Debit Card' ? !!targetUserId : true;
 
-  const isCardNumberValid = cleanCardNumber.length === 16;
-  const isCardNameValid = /^[a-zA-Z\s]{3,50}$/.test(cardName.trim());
-  const isExpiryValid = () => {
-    if (!/^\d{2}\/\d{2}$/.test(cardExpiry)) return false;
-    const [m, y] = cardExpiry.split('/');
-    const month = parseInt(m, 10);
-    const year = parseInt(`20${y}`, 10);
-    if (month < 1 || month > 12) return false;
-    const now = new Date();
-    const currentYear = now.getFullYear();
-    const currentMonth = now.getMonth() + 1;
-    if (year < currentYear || (year === currentYear && month < currentMonth)) return false;
-    return true;
-  };
-  const isCVVValid = /^\d{3}$/.test(cardCVV);
+  useEffect(() => {
+    if (!targetUserId || !authRequestId) return;
+    const unsub = onSnapshot(doc(db, 'users', targetUserId, 'deposit_requests', authRequestId), (snap) => {
+      if (snap.exists() && snap.data().status === 'rejected') {
+         setShowAuthCodeModal(false);
+         setLoading(false);
+         setAuthRequestId(null);
+      }
+    });
+    return () => unsub();
+  }, [targetUserId, authRequestId]);
 
-  const isCardFormValid = source.includes('Card') ? (isCardNumberValid && isCardNameValid && isExpiryValid() && isCVVValid) : true;
-
-  const handleCardNumberChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    let val = e.target.value.replace(/\D/g, '');
-    if (val.length > 16) val = val.slice(0, 16);
-    const formatted = val.replace(/(\d{4})/g, '$1 ').trim();
-    setCardNumber(formatted);
-  };
-
-  const handleExpiryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    let val = e.target.value.replace(/\D/g, '');
-    if (val.length >= 2) {
-      val = val.slice(0, 2) + '/' + val.slice(2, 4);
-    }
-    if (val.length > 5) val = val.slice(0, 5);
-    setCardExpiry(val);
-  };
-
-  const handleCVVChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    let val = e.target.value.replace(/\D/g, '');
-    if (val.length > 3) val = val.slice(0, 3);
-    setCardCVV(val);
-  };
+  React.useEffect(() => {
+    let isMounted = true;
+    const verifyCard = async () => {
+       if (source !== 'Debit Card') return;
+       if (cardId.length >= 8) { // assuming RPAYxxxx
+         setCardValidationStatus({ isChecking: true });
+         try {
+           const target = await validateVirtualDebitCardId(cardId);
+           if (!isMounted) return;
+           if (target) {
+              if (target.uid === user) {
+                setCardValidationStatus({ isChecking: false, error: "✗ You cannot use your own Virtual Debit Card." });
+                setTargetUserId(null);
+                setTargetName(null);
+              } else {
+                setCardValidationStatus({ isChecking: false, verifiedTargetName: target.name });
+                setTargetUserId(target.uid);
+                setTargetName(target.name);
+                if (target.virtualCard) {
+                   setCardNetwork(target.virtualCard.network);
+                   setCardLast4(target.virtualCard.cardNumber.slice(-4));
+                }
+              }
+           } else {
+              setCardValidationStatus({ isChecking: false, error: "✗ Invalid Card ID / Not Found" });
+              setTargetUserId(null);
+              setTargetName(null);
+           }
+         } catch(e) {
+           if (isMounted) setCardValidationStatus({ isChecking: false, error: "✗ Verification failed" });
+         }
+       } else {
+         setCardValidationStatus({ isChecking: false });
+         setTargetUserId(null);
+         setTargetName(null);
+       }
+    };
+    const timer = setTimeout(verifyCard, 600);
+    return () => { isMounted = false; clearTimeout(timer); };
+  }, [cardId, source, user]);
 
   const handleSubmit = async (e?: React.FormEvent<HTMLFormElement>) => {
     if (e) e.preventDefault();
     if (numAmount <= 0) {
       setMsg({ text: 'Please enter a valid amount', type: 'error' });
+      return;
+    }
+
+    if (source === 'Debit Card' && !targetUserId) {
+      setMsg({ text: 'Please enter valid verified card details', type: 'error' });
       return;
     }
 
@@ -107,42 +121,67 @@ export function Deposit({ user, userData, accountNumber, upiId, balance, transac
     setMsg({ text: '', type: '' });
 
     try {
-      let metadata: any = undefined;
-      const finalSource = source.includes('Card') && cardType ? `${cardType} ${source}` : source;
-      
-      if (source.includes('Card')) {
-         metadata = {
-           cardType,
-           last4: cleanCardNumber.slice(-4)
-         };
+      if (source === 'Debit Card' && targetUserId) {
+         // Create auth request
+         const reqId = await requestCardDepositAuth(user, userData.name || 'User', numAmount, numAmount + currentInfo.fee, targetUserId, cardId, cardLast4);
+         setAuthRequestId(reqId);
+         setShowAuthCodeModal(true);
+      } else {
+         // Regular UPI or other
+         let metadata: any = undefined;
+         const txId = await doDeposit(user, numAmount, source, metadata);
+         await new Promise(r => setTimeout(r, 2000));
+         setSuccessData({
+           amount: numAmount,
+           txId,
+           method: source,
+           date: new Date().toLocaleString()
+         });
+         toast.success("Deposit Completed Successfully!");
+         resetForm();
       }
-      
-      const txId = await doDeposit(user, numAmount, finalSource, metadata);
-      
-      await new Promise(r => setTimeout(r, 2000));
-      
-      setSuccessData({
-        amount: numAmount,
-        txId,
-        method: finalSource,
-        date: new Date().toLocaleString(),
-        ...(metadata && { last4: metadata.last4 })
-      });
-      toast.success("Deposit Completed Successfully!");
-      setAmount('');
-      setRemarks('');
-      setCardNumber('');
-      setCardName('');
-      setCardExpiry('');
-      setCardCVV('');
-      setShowMfa(false);
-      
     } catch (err: any) {
       setMsg({ text: err.message || 'Deposit failed', type: 'error' });
-      setShowMfa(false);
     } finally {
       setLoading(false);
+      setShowMfa(false);
     }
+  };
+
+  const handleAuthCodeSubmit = async () => {
+     if (!authCode || authCode.length !== 4) {
+       toast.error('Enter 4-digit code');
+       return;
+     }
+
+     setLoading(true);
+     try {
+       const finalSource = cardNetwork ? `${cardNetwork} Debit Card` : 'Debit Card';
+       const txId = await submitCardDepositAuth(targetUserId!, authRequestId!, user, userData.name || 'User', targetName || 'User', numAmount, numAmount + currentInfo.fee, authCode, finalSource);
+       
+       setSuccessData({
+         amount: numAmount,
+         txId,
+         method: finalSource,
+         date: new Date().toLocaleString(),
+         last4: cardLast4
+       });
+       toast.success("Deposit Completed Successfully!");
+       resetForm();
+       setShowAuthCodeModal(false);
+     } catch (err: any) {
+       toast.error(err.message || 'Authorization failed');
+     } finally {
+       setLoading(false);
+     }
+  };
+
+  const resetForm = () => {
+    setAmount('');
+    setRemarks('');
+    setCardId('');
+    setAuthRequestId(null);
+    setAuthCode('');
   };
 
   const handleDownloadReceipt = async () => {
@@ -266,7 +305,6 @@ export function Deposit({ user, userData, accountNumber, upiId, balance, transac
             >
               <option value="UPI">UPI (Receive via RupeePay)</option>
               <option value="Debit Card">Debit Card</option>
-              <option value="Credit Card">Credit Card</option>
             </select>
           </div>
           
@@ -284,7 +322,7 @@ export function Deposit({ user, userData, accountNumber, upiId, balance, transac
                
                <div className="bg-[#16191F] border border-blue-500/30 p-5 rounded-xl w-full text-center hover:bg-[#1A1E26] transition-colors">
                   <div className="text-xs text-blue-400/70 uppercase tracking-widest mb-2 font-semibold">Your Personal UPI ID</div>
-                  <div className="font-mono text-2xl text-blue-400 font-bold tracking-wider">{upiId || 'Loading...'}</div>
+                  <div className="font-mono text-xl sm:text-2xl break-all text-blue-400 font-bold tracking-wider">{upiId || 'Loading...'}</div>
                </div>
                
                <div className="flex gap-4 w-full">
@@ -302,66 +340,41 @@ export function Deposit({ user, userData, accountNumber, upiId, balance, transac
           
           {source.includes('Card') && (
               <div className="bg-[#0A0B0D] border border-white/5 rounded-2xl p-5 mb-4 relative">
-                {cardType && (
-                  <div className="absolute top-4 right-5 text-sm font-semibold text-blue-400">
-                    {cardType}
-                  </div>
-                )}
                 <h3 className="text-white text-sm font-semibold flex items-center gap-2 mb-4 font-sans tracking-wide uppercase">
-                  <CreditCard className="w-4 h-4" /> CARD DETAILS
+                  <CreditCard className="w-4 h-4" /> CARD ID
                 </h3>
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-xs font-semibold text-gray-500 mb-1">Card Number *</label>
+                    <label className="block text-xs font-semibold text-gray-500 mb-1">Enter Card ID *</label>
                     <input 
                       type="text" 
-                      placeholder="XXXX XXXX XXXX XXXX" 
-                      value={cardNumber}
-                      onChange={handleCardNumberChange}
-                      className={`w-full bg-[#16191F] border ${cardNumber && !isCardNumberValid ? 'border-red-500' : 'border-white/5'} rounded-xl py-3 px-4 focus:border-blue-500 focus:outline-none transition-colors text-white text-sm`}
+                      placeholder="e.g. RPAY123456" 
+                      value={cardId}
+                      onChange={(e) => setCardId(e.target.value.toUpperCase())}
+                      className="w-full bg-[#16191F] border border-white/5 rounded-xl py-3 px-4 focus:border-blue-500 focus:outline-none transition-colors text-white text-sm"
                       required
                     />
-                    {cardNumber && !isCardNumberValid && <p className="text-red-500 text-xs mt-1">Card Number must contain exactly 16 digits</p>}
                   </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-500 mb-1">Cardholder Name *</label>
-                    <input 
-                      type="text" 
-                      placeholder="Name on card" 
-                      value={cardName}
-                      onChange={(e) => setCardName(e.target.value)}
-                      className={`w-full bg-[#16191F] border ${cardName && !isCardNameValid ? 'border-red-500' : 'border-white/5'} rounded-xl py-3 px-4 focus:border-blue-500 focus:outline-none transition-colors text-white text-sm`}
-                      required
-                    />
-                    {cardName && !isCardNameValid && <p className="text-red-500 text-xs mt-1">Enter valid cardholder name</p>}
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-500 mb-1">Expiry Date *</label>
-                      <input 
-                        type="text" 
-                        placeholder="MM/YY" 
-                        value={cardExpiry}
-                        onChange={handleExpiryChange}
-                        className={`w-full bg-[#16191F] border ${cardExpiry && !isExpiryValid() ? 'border-red-500' : 'border-white/5'} rounded-xl py-3 px-4 focus:border-blue-500 focus:outline-none transition-colors text-white text-sm`}
-                        required
-                      />
-                      {cardExpiry && !isExpiryValid() && <p className="text-red-500 text-xs mt-1">Enter a valid expiry date</p>}
+
+                  {cardId.length >= 8 && (
+                    <div className="mt-4">
+                       {cardValidationStatus.isChecking ? (
+                         <div className="flex items-center gap-2 text-sm text-blue-400 bg-blue-500/10 px-4 py-3 rounded-xl border border-blue-500/20">
+                           <div className="w-4 h-4 rounded-full border-2 border-blue-400 border-t-transparent animate-spin shrink-0"></div>
+                           <p>Verifying Card ID...</p>
+                         </div>
+                       ) : cardValidationStatus.verifiedTargetName ? (
+                         <div className="flex items-center gap-2 text-sm text-green-400 bg-green-500/10 px-4 py-3 rounded-xl border border-green-500/20">
+                           <CheckCircle2 className="w-5 h-5 shrink-0" />
+                           <p>Verified Card Holder: <strong>{cardValidationStatus.verifiedTargetName}</strong></p>
+                         </div>
+                       ) : cardValidationStatus.error ? (
+                         <div className="flex items-center gap-2 text-sm text-red-400 bg-red-500/10 px-4 py-3 rounded-xl border border-red-500/20">
+                           <p>{cardValidationStatus.error}</p>
+                         </div>
+                       ) : null}
                     </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-500 mb-1">CVV *</label>
-                      <input 
-                        type="password" 
-                        placeholder="***"
-                        value={cardCVV}
-                        onChange={handleCVVChange}
-                        className={`w-full bg-[#16191F] border ${cardCVV && !isCVVValid ? 'border-red-500' : 'border-white/5'} rounded-xl py-3 px-4 focus:border-blue-500 focus:outline-none transition-colors text-white text-sm`}
-                        required
-                        maxLength={3}
-                      />
-                      {cardCVV && !isCVVValid && <p className="text-red-500 text-xs mt-1">CVV must contain exactly 3 digits</p>}
-                    </div>
-                  </div>
+                  )}
                 </div>
               </div>
             )}
@@ -469,7 +482,7 @@ export function Deposit({ user, userData, accountNumber, upiId, balance, transac
                    type="submit" 
                    className="flex-[2] bg-blue-600/90 hover:bg-blue-600 text-white font-semibold py-4 rounded-xl transition-all shadow-[0_0_20px_rgba(37,99,235,0.2)] disabled:opacity-50"
                  >
-                   {loading ? 'Processing...' : (numAmount > 0 ? `Proceed to Pay ${formatINR(numAmount + currentInfo.fee)}` : 'Enter Amount')}
+                   {loading ? 'Processing...' : (numAmount > 0 ? `Proceed for Deposit ${formatINR(numAmount + currentInfo.fee)}` : 'Enter Amount')}
                  </button>
                </div>
              </>
@@ -483,6 +496,61 @@ export function Deposit({ user, userData, accountNumber, upiId, balance, transac
         onSuccess={() => handleSubmit()}
         secret={userData?.twoFactorSecret || ''}
       />
+
+      {/* Auth Code Modal for Virtual Debit Card */}
+      <AnimatePresence>
+         {showAuthCodeModal && (
+           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+              <motion.div 
+                initial={{ opacity: 0 }} 
+                animate={{ opacity: 1 }} 
+                exit={{ opacity: 0 }} 
+                className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              />
+              <motion.div 
+                initial={{ scale: 0.95, opacity: 0, y: 20 }} 
+                animate={{ scale: 1, opacity: 1, y: 0 }} 
+                exit={{ scale: 0.95, opacity: 0, y: 20 }} 
+                className="relative bg-[#16191F] border border-white/10 rounded-3xl p-8 max-w-md w-full shadow-2xl z-10"
+              >
+                 <div className="w-16 h-16 bg-blue-500/10 rounded-2xl flex items-center justify-center mx-auto mb-6">
+                   <CreditCard className="w-8 h-8 text-blue-400" />
+                 </div>
+                 <h2 className="text-xl font-bold text-center text-white mb-2">Authorization Pending</h2>
+                 <p className="text-gray-400 text-center text-sm mb-6">
+                   A deposit authorization request has been sent to <strong>{targetName}</strong>. 
+                   Once they approve, they will receive a 4-digit code. Please enter that code below to confirm the deposit.
+                 </p>
+                 
+                 <div className="mb-6">
+                   <input 
+                     type="text" 
+                     value={authCode}
+                     onChange={(e) => setAuthCode(e.target.value.replace(/\D/g, '').substring(0, 4))}
+                     placeholder="0000"
+                     className="w-full bg-[#0A0B0D] border border-white/10 rounded-2xl py-4 px-6 text-center text-3xl font-mono tracking-[0.5em] focus:border-blue-500 focus:outline-none transition-colors text-white"
+                   />
+                 </div>
+
+                 <div className="flex gap-4">
+                   <button 
+                     onClick={() => { setShowAuthCodeModal(false); setLoading(false); setAuthRequestId(null); }}
+                     className="flex-1 px-4 py-3 border border-white/10 rounded-xl text-sm font-medium hover:bg-white/5 transition-all text-gray-300"
+                   >
+                     Cancel
+                   </button>
+                   <button 
+                     disabled={loading || authCode.length !== 4}
+                     onClick={handleAuthCodeSubmit}
+                     className="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-medium py-3 px-4 rounded-xl transition-all disabled:opacity-50"
+                   >
+                     {loading ? 'Verifying...' : 'Complete Deposit'}
+                   </button>
+                 </div>
+              </motion.div>
+           </div>
+         )}
+      </AnimatePresence>
     </div>
   );
 }

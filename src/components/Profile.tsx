@@ -1,15 +1,51 @@
 import React, { useState, useRef } from 'react';
-import { Camera, Shield, Bell, Key, User, Mail, Save } from 'lucide-react';
-import { updateUserProfile } from '../lib/firebaseUtils';
-import { auth } from '../lib/firebase';
+import { Camera, Shield, Bell, Key, User, Mail, Save, CreditCard, Eye, EyeOff, Check, X, Lock, CheckCircle2, ShieldCheck, Copy } from 'lucide-react';
+import { updateUserProfile, updateDepositRequestStatus } from '../lib/firebaseUtils';
+import { auth, db } from '../lib/firebase';
 import { updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth';
-import { collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { collection, query, where, getDocs, doc, getDoc, updateDoc } from 'firebase/firestore';
+import { toast } from 'react-hot-toast';
 
-export function Profile({ userData, user, onComplete, initialTab = 'personal' }: { userData: any, user: string, onComplete: () => void, initialTab?: 'personal' | 'security' | 'notifications' | 'password' }) {
-  const [activeTab, setActiveTab] = useState<'personal' | 'security' | 'password' | 'notifications'>(initialTab);
+export function Profile({ userData, user, onComplete, initialTab = 'personal' }: { userData: any, user: string, onComplete: () => void, initialTab?: 'personal' | 'security' | 'notifications' | 'password' | 'virtualcard' }) {
+  const [activeTab, setActiveTab] = useState<'personal' | 'security' | 'password' | 'notifications' | 'virtualcard'>(initialTab);
   
   const [phoneVal, setPhoneVal] = useState(userData.phone || "+91 ");
+  const [showCard, setShowCard] = useState(false);
+  const [depositRequests, setDepositRequests] = useState<any[]>([]);
+  const [reqLoading, setReqLoading] = useState(false);
+
+  React.useEffect(() => {
+    if (activeTab === 'notifications') {
+       loadRequests();
+    }
+  }, [activeTab]);
+
+  const loadRequests = async () => {
+     try {
+       const snap = await getDocs(query(collection(db, 'users', user, 'deposit_requests'), where('status', 'in', ['pending', 'approved'])));
+       setDepositRequests(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a: any, b: any) => {
+         const timeA = a.timestamp || (a.date ? new Date(a.date).getTime() : 0);
+         const timeB = b.timestamp || (b.date ? new Date(b.date).getTime() : 0);
+         return timeB - timeA;
+       }));
+     } catch(e) {}
+  };
+
+  const handleRequestAction = async (reqId: string, status: 'approved'|'rejected') => {
+    setReqLoading(true);
+    try {
+      const data = await updateDepositRequestStatus(user, reqId, status);
+      if (data && status === 'approved') {
+         toast.success('Deposit Approved! Share the Authorization Code displayed below.', { duration: 5000 });
+      }
+      await loadRequests();
+    } catch(e) {
+      console.error(e);
+      toast.error('Failed to update request');
+    } finally {
+      setReqLoading(false);
+    }
+  };
 
   React.useEffect(() => {
     if (userData.phone) {
@@ -201,6 +237,7 @@ export function Profile({ userData, user, onComplete, initialTab = 'personal' }:
     { id: 'security', label: 'Security & Privacy', icon: <Shield className="w-5 h-5" /> },
     { id: 'notifications', label: 'Notifications', icon: <Bell className="w-5 h-5" /> },
     { id: 'password', label: 'Password', icon: <Key className="w-5 h-5" /> },
+    { id: 'virtualcard', label: 'Virtual Debit Card', icon: <CreditCard className="w-5 h-5" /> },
   ] as const;
 
   return (
@@ -416,6 +453,45 @@ export function Profile({ userData, user, onComplete, initialTab = 'personal' }:
           {activeTab === 'notifications' && (
             <div className="bg-[#16191F] border border-white/5 rounded-3xl p-8 shadow-xl">
               <h3 className="text-xl font-semibold mb-6">Notifications</h3>
+              {depositRequests.length > 0 && (
+                <div className="mb-8 space-y-4">
+                  <h4 className="text-sm font-semibold uppercase tracking-wider text-blue-400">Action Required: Auth Requests</h4>
+                  {depositRequests.map(req => (
+                    <div key={req.id} className={`${req.status === 'approved' ? 'bg-green-900/10 border-green-500/30' : 'bg-blue-900/20 border-blue-500/30'} border p-5 rounded-2xl flex flex-col gap-4`}>
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                        <div>
+                          <p className="text-white font-medium mb-1">Deposit Request from {req.requesterName}</p>
+                          <p className="text-sm text-gray-300">Amount: ₹{req.amount} (Total Deduction: ₹{req.amountWithFee}) using card ending in **{req.last4}</p>
+                        </div>
+                        
+                        {req.status === 'pending' && (
+                          <div className="flex gap-2 w-full sm:w-auto">
+                            <button disabled={reqLoading} onClick={() => handleRequestAction(req.id, 'approved')} className="flex-1 sm:flex-none flex justify-center items-center gap-1 bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-xl text-sm transition-all shadow-lg shadow-green-500/20">
+                              <Check className="w-4 h-4" /> Approve
+                            </button>
+                            <button disabled={reqLoading} onClick={() => handleRequestAction(req.id, 'rejected')} className="flex-1 sm:flex-none flex justify-center items-center gap-1 bg-red-500/10 hover:bg-red-500/20 text-red-400 font-bold py-2 px-4 rounded-xl text-sm transition-all">
+                              <X className="w-4 h-4" /> Reject
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {req.status === 'approved' && (
+                        <div className="bg-black/20 rounded-xl p-4 flex flex-col sm:flex-row items-center justify-between gap-4 border border-green-500/20 mt-2">
+                          <div>
+                            <p className="text-green-400 font-medium flex items-center gap-2"><CheckCircle2 className="w-4 h-4" /> Approved</p>
+                            <p className="text-xs text-gray-400 mt-1">Please share this authorization code with the requester to complete the deposit.</p>
+                          </div>
+                          <div className="bg-[#0A0B0D] px-6 py-3 rounded-xl border border-white/5">
+                            <span className="font-mono text-2xl font-bold tracking-[0.2em] text-white">{req.authCode}</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {!userData.notifications || userData.notifications.length === 0 ? (
                 <div className="flex flex-col items-center justify-center min-h-[200px] text-center">
                   <Bell className="w-12 h-12 text-gray-600 mx-auto mb-4" />
@@ -499,6 +575,89 @@ export function Profile({ userData, user, onComplete, initialTab = 'personal' }:
                   </button>
                 </div>
               </form>
+            </div>
+          )}
+
+          {activeTab === 'virtualcard' && (
+            <div className="bg-[#16191F] border border-white/5 rounded-3xl p-8 shadow-xl">
+              <h3 className="text-xl font-semibold mb-2">Virtual Debit Card</h3>
+              <p className="text-sm text-gray-400 mb-8 max-w-sm">
+                Your unique RupeePay virtual debit card. You can use these details to allow others to add money to your account safely.
+              </p>
+
+              {userData.virtualCard ? (
+                <div className="flex flex-col md:flex-row gap-8 items-start">
+                  <div className="relative w-full max-w-[400px] min-h-[280px] rounded-2xl p-6 flex flex-col justify-between overflow-hidden shadow-2xl shrink-0 group">
+                    <div className="absolute inset-0 bg-gradient-to-br from-blue-700 via-indigo-800 to-purple-900 z-0"></div>
+                    <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-white/20 via-transparent to-transparent z-0"></div>
+                    <div className="absolute w-[200px] h-[200px] bg-blue-500/20 blur-3xl -bottom-10 -left-10 rounded-full z-0"></div>
+                    
+                    <div className="relative z-10 flex justify-between items-start">
+                      <div className="font-bold text-xl tracking-wider text-white">RupeePay</div>
+                      <div className="text-xl italic font-bold text-white/90">{userData.virtualCard.network}</div>
+                    </div>
+                    
+                    <div className="relative z-10 mt-6">
+                       <img src="https://upload.wikimedia.org/wikipedia/commons/a/a4/EMV_chip_silver.png" alt="chip" className="w-12 h-10 object-contain opacity-80" />
+                    </div>
+
+                    <div className="relative z-10 mt-2">
+                       <div className="font-mono text-xl sm:text-2xl text-white tracking-[0.1em] sm:tracking-[0.2em] font-medium text-shadow-sm">
+                         {showCard ? userData.virtualCard.cardNumber.match(/.{1,4}/g)?.join(' ') : `**** **** **** ${userData.virtualCard.cardNumber.slice(-4)}`}
+                       </div>
+                    </div>
+
+                    <div className="relative z-10 flex justify-between items-end mt-4">
+                       <div>
+                         <div className="text-[10px] text-white/60 uppercase tracking-widest mb-1">Card Holder</div>
+                         <div className="font-medium text-sm text-white uppercase tracking-wider">{userData.virtualCard.name}</div>
+                       </div>
+                       <div className="text-right">
+                         <div className="flex gap-4">
+                           <div className="text-left">
+                             <div className="text-[9px] text-white/60 uppercase tracking-widest mb-1 leading-none">Valid<br/>Thru</div>
+                             <div className="font-mono text-sm text-white">{showCard ? userData.virtualCard.expiry : '**/**'}</div>
+                           </div>
+                           <div className="text-left">
+                             <div className="text-[9px] text-white/60 uppercase tracking-widest mb-1 leading-none">CVV</div>
+                             <div className="font-mono text-sm text-white">{showCard ? userData.virtualCard.cvv : '***'}</div>
+                           </div>
+                         </div>
+                       </div>
+                    </div>
+                    
+                    <div className="relative z-10 mt-5 pt-4 border-t border-white/20 flex justify-between items-center">
+                       <div className="text-[10px] text-white/80 uppercase tracking-widest font-semibold flex items-center gap-1.5"><CreditCard className="w-4 h-4 text-blue-300" /> Card ID</div>
+                       <div className="font-mono text-sm sm:text-base tracking-widest text-[#93C5FD] font-semibold bg-white/10 px-3 py-1 rounded-md backdrop-blur-sm">
+                         {showCard ? userData.virtualCard.cardId : 'RPAY******'}
+                       </div>
+                    </div>
+                  </div>
+
+                  <div className="flex-1 space-y-4">
+                     <button 
+                       onClick={() => setShowCard(!showCard)}
+                       className="flex items-center justify-center gap-2 w-full py-4 bg-[#232730] hover:bg-[#2A2F3A] text-white font-medium rounded-xl transition-all border border-white/5"
+                     >
+                       {showCard ? <EyeOff className="w-5 h-5 text-gray-400" /> : <Eye className="w-5 h-5 text-gray-400" />}
+                       {showCard ? 'Hide Card Details' : 'Reveal Card Details'}
+                     </button>
+                     
+                     <button 
+                       onClick={() => { if(userData.virtualCard?.cardId) { navigator.clipboard.writeText(userData.virtualCard.cardId); toast.success("Card ID Copied!"); } }}
+                       className="flex items-center justify-center gap-2 w-full py-4 bg-[#232730] hover:bg-[#2A2F3A] text-white font-medium rounded-xl transition-all border border-white/5"
+                     >
+                       <Copy className="w-5 h-5 text-gray-400" /> Copy Card ID
+                     </button>
+                     
+                     <div className="bg-blue-500/10 border border-blue-500/20 p-4 rounded-xl text-sm text-blue-400">
+                       Card details are unique to your account. Keep them secure. Use these details to receive deposits from other users securely via authorization codes.
+                     </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-gray-500">Generating virtual card... please wait or refresh.</div>
+              )}
             </div>
           )}
         </div>

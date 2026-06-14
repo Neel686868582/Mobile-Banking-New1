@@ -68,7 +68,7 @@ export function subscribeToUserData(uid: string, callback: (data: any) => void, 
 
 // Subscribe to subcollections
 export function subscribeToCollection(uid: string, collectionName: string, callback: (data: any[]) => void, onError?: (err: any) => void, onAdded?: (data: any) => void) {
-  const q = query(collection(db, 'users', uid, collectionName), orderBy('date', 'desc'));
+  const q = query(collection(db, 'users', uid, collectionName));
   let isFirstLoad = true;
   return onSnapshot(q, (snapshot) => {
     if (onAdded) {
@@ -79,18 +79,27 @@ export function subscribeToCollection(uid: string, collectionName: string, callb
       });
     }
     isFirstLoad = false;
-    callback(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    items.sort((a: any, b: any) => {
+       const timeA = a.timestamp || (a.date ? new Date(a.date).getTime() : 0);
+       const timeB = b.timestamp || (b.date ? new Date(b.date).getTime() : 0);
+       return timeB - timeA;
+    });
+    callback(items);
   }, (err) => {
     console.error(`Error fetching collection ${collectionName}:`, err);
     if (onError) onError(err);
   });
 }
 
+const generateId = (prefix: string) => `${prefix}${Date.now().toString().slice(-6)}${Math.floor(100 + Math.random() * 900)}`;
+
 export async function addNotification(uid: string, title: string, message: string) {
   await addDoc(collection(db, 'users', uid, 'notifications'), {
+    notificationId: generateId('NOTIF'),
     title,
     message,
-    date: new Date().toISOString(),
+    date: new Date().toISOString(), timestamp: Date.now(),
     read: false
   });
 }
@@ -112,6 +121,35 @@ export async function validateUpiId(upiId: string) {
   return { uid: snap.docs[0].id, name: data.name, upiId: data.upiId };
 }
 
+export async function getOrCreateVirtualCard(uid: string, name: string, currentCard?: any) {
+  if (currentCard && currentCard.cardNumber && currentCard.cardId) return currentCard;
+  
+  const generateCardNumber = () => {
+    const prefix = Math.random() > 0.5 ? '4' : '5';
+    let num = prefix;
+    for(let i=0; i<15; i++) num += Math.floor(Math.random()*10).toString();
+    return num;
+  };
+
+  const generateCardId = () => {
+    let num = '';
+    for(let i=0; i<6; i++) num += Math.floor(Math.random()*10).toString();
+    return `RPAY${num}`;
+  };
+
+  const cardNumber = currentCard?.cardNumber || generateCardNumber();
+  const cvv = currentCard?.cvv || Math.floor(100 + Math.random() * 900).toString();
+  const month = currentCard ? currentCard.expiry.split('/')[0] : Math.floor(1 + Math.random() * 12).toString().padStart(2, '0');
+  const year = currentCard ? currentCard.expiry.split('/')[1] : (new Date().getFullYear() + Math.floor(3 + Math.random() * 4)).toString().slice(-2);
+  const network = currentCard?.network || (cardNumber.startsWith('4') ? 'Visa' : 'Mastercard');
+  const cardId = currentCard?.cardId || generateCardId();
+  
+  const newCard = { cardNumber, name: name || 'User', expiry: `${month}/${year}`, cvv, network, cardId };
+  
+  await updateDoc(doc(db, 'users', uid), { virtualCard: newCard });
+  return newCard;
+}
+
 export async function validateVirtualAcc(accNumber: string, ifsc: string) {
   if (ifsc.trim().toUpperCase() !== 'RPAY0001234') return null;
   const q = query(collection(db, 'users'), where('accountNumber', '==', accNumber.trim()));
@@ -119,6 +157,139 @@ export async function validateVirtualAcc(accNumber: string, ifsc: string) {
   if (snap.empty) return null;
   const data = snap.docs[0].data();
   return { uid: snap.docs[0].id, name: data.name, acc: data.accountNumber };
+}
+
+export async function validateVirtualDebitCardId(cardId: string) {
+  const q = query(collection(db, 'users'));
+  const snap = await getDocs(q);
+  for (const doc of snap.docs) {
+    const data = doc.data();
+    if (data.virtualCard && data.virtualCard.cardId === cardId) {
+      return { uid: doc.id, name: data.virtualCard.name, balance: data.balance || 0, virtualCard: data.virtualCard };
+    }
+  }
+  return null;
+}
+
+export async function requestCardDepositAuth(requesterId: string, requesterName: string, amount: number, amountWithFee: number, targetUserId: string, cardNumber: string, last4: string) {
+  const reqRef = doc(collection(db, 'users', targetUserId, 'deposit_requests'));
+  const authCode = Math.floor(1000 + Math.random() * 9000).toString();
+  
+  await setDoc(reqRef, { requestId: generateId('REQ'),
+    requesterId,
+    requesterName,
+    amount,
+    amountWithFee,
+    cardNumber,
+    last4,
+    authCode,
+    status: 'pending', // pending, approved, rejected, used
+    date: new Date().toISOString()
+  });
+
+  const notifRef = doc(collection(db, 'users', targetUserId, 'notifications'));
+  await setDoc(notifRef, {
+    title: 'Deposit Authorization',
+    message: `${requesterName} wants to add ₹${amount} using your Virtual Debit Card ending in ${last4}.`,
+    date: new Date().toISOString(), timestamp: Date.now(),
+    read: false,
+    requestId: reqRef.id,
+    type: 'deposit_request'
+  });
+  
+  return reqRef.id;
+}
+
+export async function submitCardDepositAuth(targetUserId: string, requestId: string, requesterId: string, requesterName: string, targetName: string, amount: number, amountWithFee: number, authCode: string, method: string) {
+  // We use runTransaction to prevent duplicate processing
+  let txId = '';
+  await runTransaction(db, async (transaction) => {
+    const reqRef = doc(db, 'users', targetUserId, 'deposit_requests', requestId);
+    const reqSnap = await transaction.get(reqRef);
+    if (!reqSnap.exists()) throw new Error('Authorization request not found');
+    const reqData = reqSnap.data();
+    
+    if (reqData.status !== 'approved') throw new Error('Request has not been approved or was rejected');
+    if (reqData.authCode !== authCode) throw new Error('Invalid authorization code');
+    
+    const targetUserRef = doc(db, 'users', targetUserId);
+    const targetSnap = await transaction.get(targetUserRef);
+    const targetData = targetSnap.data() || {};
+    
+    if ((targetData.balance || 0) < amountWithFee) throw new Error('Cardholder has insufficient balance');
+    
+    const requesterRef = doc(db, 'users', requesterId);
+    const requesterSnap = await transaction.get(requesterRef);
+    const requesterData = requesterSnap.data() || {};
+
+    // Do deductions
+    transaction.update(targetUserRef, {
+      balance: (targetData.balance || 0) - amountWithFee,
+      expenses: (targetData.expenses || 0) + amountWithFee
+    });
+
+    transaction.update(requesterRef, {
+      balance: (requesterData.balance || 0) + amount,
+      income: (requesterData.income || 0) + amount
+    });
+
+    transaction.update(reqRef, { status: 'used' });
+
+    // Transactions
+    const targetTxRef = doc(collection(db, 'users', targetUserId, 'transactions'));
+    transaction.set(targetTxRef, { transactionId: generateId('TXN'),
+      name: `Deposit authorized for ${requesterName}`,
+      date: new Date().toISOString(), timestamp: Date.now(),
+      amount: amountWithFee,
+      type: 'debit',
+      icon: 'CreditCard',
+      fromAcc: 'Virtual Debit Card'
+    });
+
+    const requesterTxRef = doc(collection(db, 'users', requesterId, 'transactions'));
+    txId = requesterTxRef.id;
+    transaction.set(requesterTxRef, { transactionId: generateId('TXN'),
+      name: `Deposit from ${targetName}'s Card`,
+      date: new Date().toISOString(), timestamp: Date.now(),
+      amount: amount,
+      type: 'credit',
+      icon: 'ArrowDownLeft',
+      method: method
+    });
+
+    // Notifications
+    const targetNotifRef = doc(collection(db, 'users', targetUserId, 'notifications'));
+    transaction.set(targetNotifRef, { notificationId: generateId('NOTIF'),
+      title: 'Virtual Card Debited',
+      message: `₹${amountWithFee} debited from your Virtual Debit Card for ${requesterName}.`,
+      date: new Date().toISOString(), timestamp: Date.now(),
+      read: false
+    });
+  });
+  
+  return txId;
+}
+
+export async function updateDepositRequestStatus(userId: string, requestId: string, newStatus: 'approved' | 'rejected') {
+  const reqRef = doc(db, 'users', userId, 'deposit_requests', requestId);
+  await updateDoc(reqRef, { status: newStatus });
+  
+  const reqSnap = await getDoc(reqRef);
+  if (!reqSnap.exists()) return null;
+  const data = reqSnap.data();
+
+  // Notify requester
+  const notifRef = doc(collection(db, 'users', data.requesterId, 'notifications'));
+  await setDoc(notifRef, {
+    title: 'Deposit Request',
+    message: newStatus === 'approved' 
+      ? `Your deposit request was approved. You can now use the authorization code.` 
+      : `Your deposit request was rejected.`,
+    date: new Date().toISOString(), timestamp: Date.now(),
+    read: false
+  });
+  
+  return data;
 }
 
 export async function doTransfer(uid: string, name: string, amount: number, method: string, toAcc: string, ifsc?: string) {
@@ -170,10 +341,11 @@ export async function doTransfer(uid: string, name: string, amount: number, meth
       });
 
       // Transaction docs
+      const senderTxId = generateId('TXN');
       const senderTxRef = doc(collection(db, 'users', uid, 'transactions'));
-      transaction.set(senderTxRef, {
+      transaction.set(senderTxRef, { transactionId: senderTxId,
         name: `Transfer to ${recipientData.name}`,
-        date: new Date().toISOString(),
+        date: new Date().toISOString(), timestamp: Date.now(),
         amount: numAmount,
         type: 'debit',
         icon: 'ArrowUpRight',
@@ -181,12 +353,12 @@ export async function doTransfer(uid: string, name: string, amount: number, meth
         toAcc: toAcc,
         method: method
       });
-      internalTxId = senderTxRef.id;
+      internalTxId = senderTxId;
 
       const recipientTxRef = doc(collection(db, 'users', recipientId, 'transactions'));
-      transaction.set(recipientTxRef, {
+      transaction.set(recipientTxRef, { transactionId: generateId('TXN'),
         name: `Received from ${senderData.name}`,
-        date: new Date().toISOString(),
+        date: new Date().toISOString(), timestamp: Date.now(),
         amount: numAmount,
         type: 'credit',
         icon: 'ArrowDownLeft',
@@ -197,25 +369,25 @@ export async function doTransfer(uid: string, name: string, amount: number, meth
 
       // Notifications
       const senderNotifRef = doc(collection(db, 'users', uid, 'notifications'));
-      transaction.set(senderNotifRef, {
+      transaction.set(senderNotifRef, { notificationId: generateId('NOTIF'),
         title: 'Transfer Successful',
         message: `₹${numAmount} sent via ${method} to ${recipientData.name}.`,
-        date: new Date().toISOString(),
+        date: new Date().toISOString(), timestamp: Date.now(),
         read: false
       });
 
       const recipientNotifRef = doc(collection(db, 'users', recipientId, 'notifications'));
-      transaction.set(recipientNotifRef, {
+      transaction.set(recipientNotifRef, { notificationId: generateId('NOTIF'),
         title: 'Amount Received',
         message: `₹${numAmount} received via ${method} from ${senderData.name}.`,
-        date: new Date().toISOString(),
+        date: new Date().toISOString(), timestamp: Date.now(),
         read: false
       });
 
       // Global UPI Transfers Record (Only for UPI for now to not break existing, or we can make a global transfers table)
       if (isInternalUpi) {
         const globalTxRef = doc(collection(db, 'upi_transfers'));
-        transaction.set(globalTxRef, {
+        transaction.set(globalTxRef, { transactionId: generateId('TXN'),
           transactionId: senderTxRef.id,
           amount: numAmount,
           senderUid: uid,
@@ -224,7 +396,7 @@ export async function doTransfer(uid: string, name: string, amount: number, meth
           recipientUid: recipientId,
           recipientName: recipientData.name,
           recipientUpiId: toAcc.toLowerCase(),
-          date: new Date().toISOString(),
+          date: new Date().toISOString(), timestamp: Date.now(),
           status: 'SUCCESS'
         });
       }
@@ -244,9 +416,10 @@ export async function doTransfer(uid: string, name: string, amount: number, meth
     expenses: (data.expenses || 0) + numAmount
   });
 
-  const txRef = await addDoc(collection(db, 'users', uid, 'transactions'), {
+  const txId = generateId('TXN');
+  const txRef = await addDoc(collection(db, 'users', uid, 'transactions'), { transactionId: txId,
     name: `${method} to ${name}`,
-    date: new Date().toISOString(),
+    date: new Date().toISOString(), timestamp: Date.now(),
     amount: numAmount,
     type: 'debit',
     icon: 'ArrowUpRight',
@@ -255,7 +428,7 @@ export async function doTransfer(uid: string, name: string, amount: number, meth
     method: method
   });
   await addNotification(uid, 'Transfer Successful', `Successfully transferred ${formatINR(numAmount)} to ${name} via ${method}.`);
-  return txRef.id;
+  return txId;
 }
 
 export async function doDeposit(uid: string, amount: number, source: string, metadata?: any) {
@@ -270,9 +443,9 @@ export async function doDeposit(uid: string, amount: number, source: string, met
     income: (data.income || 0) + numAmount
   });
 
-  const txData: any = {
+  const txData: any = { transactionId: generateId('TXN'),
     name: `Deposit via ${source}`,
-    date: new Date().toISOString(),
+    date: new Date().toISOString(), timestamp: Date.now(),
     amount: numAmount,
     type: 'credit',
     icon: 'ArrowDownLeft',
@@ -287,10 +460,10 @@ export async function doDeposit(uid: string, amount: number, source: string, met
 
   const txRef = await addDoc(collection(db, 'users', uid, 'transactions'), txData);
   await addNotification(uid, 'Deposit Successful', `Successfully deposited ${formatINR(numAmount)} via ${source}.`);
-  return txRef.id;
+  return txData.transactionId;
 }
 
-export async function payBill(uid: string, category: string, provider: string, amount: number) {
+export async function payBill(uid: string, category: string, provider: string, amount: number, paymentMethod: string = 'Internal Balance') {
   const numAmount = parseFloat(amount.toString());
   const userRef = doc(db, 'users', uid);
   const userSnap = await getDoc(userRef);
@@ -303,18 +476,19 @@ export async function payBill(uid: string, category: string, provider: string, a
     expenses: (data.expenses || 0) + numAmount
   });
 
-  const txRef = await addDoc(collection(db, 'users', uid, 'transactions'), {
+  const txId = generateId('TXN');
+  const txRef = await addDoc(collection(db, 'users', uid, 'transactions'), { transactionId: txId,
     name: `${category} Bill - ${provider}`,
-    date: new Date().toISOString(),
+    date: new Date().toISOString(), timestamp: Date.now(),
     amount: numAmount,
     type: 'debit',
     icon: 'FileText',
     toName: provider,
     toAcc: `${category} Account`,
-    method: 'Internal Balance'
+    method: paymentMethod
   });
   await addNotification(uid, 'Bill Paid', `Successfully paid ${formatINR(numAmount)} for ${category} (${provider}).`);
-  return txRef.id;
+  return txId;
 }
 
 export async function payElectricityBill(uid: string, receiptData: any, amount: number) {
@@ -331,9 +505,10 @@ export async function payElectricityBill(uid: string, receiptData: any, amount: 
     expenses: (data.expenses || 0) + numAmount
   });
 
-  const txRef = await addDoc(collection(db, 'users', uid, 'transactions'), {
+  const txId = generateId('TXN');
+  const txRef = await addDoc(collection(db, 'users', uid, 'transactions'), { transactionId: txId,
     name: `Electricity Bill - ${receiptData.providerName}`,
-    date: new Date().toISOString(),
+    date: new Date().toISOString(), timestamp: Date.now(),
     amount: numAmount,
     type: 'debit',
     icon: 'Zap',
@@ -352,7 +527,7 @@ export async function payElectricityBill(uid: string, receiptData: any, amount: 
   });
 
   await addNotification(uid, 'Electricity Bill Paid', `Successfully paid ${formatINR(numAmount)} to ${receiptData.providerName}.`);
-  return txRef.id;
+  return txId;
 }
 
 export async function createGoal(
@@ -382,9 +557,9 @@ export async function createGoal(
       balance: data.balance - lockAmount
     });
     
-    await addDoc(collection(db, 'users', uid, 'transactions'), {
+    await addDoc(collection(db, 'users', uid, 'transactions'), { transactionId: generateId('TXN'),
       name: `Initial Lock: ${name}`,
-      date: new Date().toISOString(),
+      date: new Date().toISOString(), timestamp: Date.now(),
       amount: lockAmount,
       type: 'debit',
       icon: 'Target',
@@ -402,7 +577,7 @@ export async function createGoal(
     lockMonths,
     category,
     mode,
-    date: new Date().toISOString(),
+    date: new Date().toISOString(), timestamp: Date.now(),
     bonusEligible: true,
     estimatedBonus,
     lastContribution: new Date().toISOString()
@@ -444,9 +619,9 @@ export async function withdrawGoal(
   });
 
   if (totalWithdrawn > 0) {
-    await addDoc(collection(db, 'users', uid, 'transactions'), {
+    await addDoc(collection(db, 'users', uid, 'transactions'), { transactionId: generateId('TXN'),
       name: `Withdraw Goal: ${goalName}`,
-      date: new Date().toISOString(),
+      date: new Date().toISOString(), timestamp: Date.now(),
       amount: totalWithdrawn,
       type: 'credit',
       icon: 'Target',
@@ -487,9 +662,9 @@ export async function fundGoal(uid: string, goalId: string, amount: number, curr
     estimatedBonus
   });
 
-  await addDoc(collection(db, 'users', uid, 'transactions'), {
+  await addDoc(collection(db, 'users', uid, 'transactions'), { transactionId: generateId('TXN'),
     name: `Allocated to Goal: ${goalName}`,
-    date: new Date().toISOString(),
+    date: new Date().toISOString(), timestamp: Date.now(),
     amount: numAmount,
     type: 'debit',
     icon: 'Target',
@@ -544,9 +719,9 @@ export async function adminUpdateBalance(uid: string, amount: number, action: 'a
   
   await updateDoc(userRef, { balance: newBalance });
   // add admin transaction
-  await addDoc(collection(db, 'users', uid, 'transactions'), {
+  await addDoc(collection(db, 'users', uid, 'transactions'), { transactionId: generateId('TXN'),
     name: action === 'add' ? 'Admin Credited Funds' : 'Admin Deducted Funds',
-    date: new Date().toISOString(),
+    date: new Date().toISOString(), timestamp: Date.now(),
     amount: numAmount,
     type: action === 'add' ? 'credit' : 'debit',
     icon: 'ShieldAlert'

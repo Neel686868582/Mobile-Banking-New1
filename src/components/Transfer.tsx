@@ -92,19 +92,6 @@ export function Transfer({ user, userData, balance, onComplete }: { user: string
     }
   }, [acc, method, userData?.upiId, userData?.accountNumber]);
 
-  const quickContacts = [
-    { name: 'Mom', acc: '1234567890', ifsc: 'HDFC0001234' },
-    { name: 'Dad', acc: '9876543210', ifsc: 'RPAY0001234' },
-    { name: 'Rahul', acc: '1122334455', ifsc: 'RPAY0001234' },
-    { name: 'Priya', acc: '9988776655', ifsc: 'RPAY0001234' },
-  ];
-
-  const handleQuickContact = (c: typeof quickContacts[0]) => {
-    setName(c.name);
-    setAcc(c.acc);
-    setIfsc(c.ifsc);
-  };
-
   const getTransferInfo = (m: string) => {
     switch(m) {
       case 'UPI': return { time: 'Instant', fee: 0 };
@@ -262,25 +249,6 @@ export function Transfer({ user, userData, balance, onComplete }: { user: string
         </div>
         <div className="bg-blue-500/10 p-4 rounded-2xl relative z-10">
           <Wallet className="w-8 h-8 text-blue-400" />
-        </div>
-      </div>
-
-      {/* 4. Quick Contacts */}
-      <div className="mb-8 overflow-x-auto no-scrollbar pb-2">
-        <div className="flex gap-4 min-w-max">
-          {quickContacts.map((contact, i) => (
-            <button
-              key={i}
-              type="button"
-              onClick={() => handleQuickContact(contact)}
-              className="flex flex-col items-center gap-2 group"
-            >
-              <div className="w-14 h-14 rounded-full bg-[#16191F] border border-white/5 flex items-center justify-center group-hover:border-blue-500/50 transition-colors">
-                <UserIcon className="w-6 h-6 text-gray-400 group-hover:text-blue-400" />
-              </div>
-              <span className="text-xs font-medium text-gray-400 group-hover:text-white transition-colors">{contact.name}</span>
-            </button>
-          ))}
         </div>
       </div>
 

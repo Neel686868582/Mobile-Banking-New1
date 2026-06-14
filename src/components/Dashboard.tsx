@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { formatINR } from '../lib/utils';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
-import { ArrowUpRight, ArrowDownLeft, Wallet, Building2, Smartphone, Zap, Droplet, Tv, CheckCircle2, Download, X, ReceiptText, Target, PlusCircle, MinusCircle, Shield } from 'lucide-react';
+import { ArrowUpRight, ArrowDownLeft, Wallet, Building2, Smartphone, Zap, Droplet, Tv, CheckCircle2, Download, X, ReceiptText, Target, PlusCircle, MinusCircle, Shield, Eye, EyeOff } from 'lucide-react';
 import { format, parseISO, subDays } from 'date-fns';
 import { motion, AnimatePresence } from 'motion/react';
 import * as htmlToImage from 'html-to-image';
@@ -20,6 +20,13 @@ const txIcons: any = {
 
 export function Dashboard({ userData, setActiveTab, onEnable2FA }: { userData: any, setActiveTab: (t: string) => void, onEnable2FA?: () => void }) {
   const [selectedTx, setSelectedTx] = useState<any>(null);
+  const [showBalance, setShowBalance] = useState<boolean>(() => sessionStorage.getItem('showBalance') !== 'false');
+
+  const toggleBalanceVisibility = () => {
+    const newValue = !showBalance;
+    setShowBalance(newValue);
+    sessionStorage.setItem('showBalance', String(newValue));
+  };
 
   const handleDownloadReceipt = async () => {
     if (!selectedTx) return;
@@ -62,11 +69,20 @@ export function Dashboard({ userData, setActiveTab, onEnable2FA }: { userData: a
           
           <div>
             <div className="flex items-center justify-between mb-4 sm:mb-2">
-              <div className="text-gray-500 text-sm font-semibold uppercase tracking-wider">Total Balance</div>
+              <div className="flex items-center gap-3">
+                <div className="text-gray-500 text-sm font-semibold uppercase tracking-wider">Total Balance</div>
+                <button 
+                  onClick={toggleBalanceVisibility} 
+                  className="text-gray-400 hover:text-white transition-colors"
+                  aria-label="Toggle Balance Visibility"
+                >
+                  {showBalance ? <Eye className="w-5 h-5" /> : <EyeOff className="w-5 h-5" />}
+                </button>
+              </div>
               <CompactVintageBadge enabled={userData.twoFactorEnabled} onClick={onEnable2FA} />
             </div>
             <div className="text-4xl md:text-5xl font-sans tracking-tight text-white mb-8 truncate">
-              {formatINR(userData.balance)}
+              {showBalance ? formatINR(userData.balance) : '₹••••••••'}
             </div>
             
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
@@ -97,11 +113,11 @@ export function Dashboard({ userData, setActiveTab, onEnable2FA }: { userData: a
         <div className="col-span-1 flex flex-row lg:flex-col gap-4 lg:gap-6">
           <div className="bg-[#16191F] border border-white/5 rounded-3xl p-4 lg:p-6 flex-1 flex flex-col justify-center">
             <div className="text-gray-500 text-[10px] sm:text-xs font-semibold uppercase tracking-wider mb-1 sm:mb-2">Total Income</div>
-            <div className="text-xl sm:text-2xl font-medium text-blue-400 truncate">{formatINR(userData.income || 0)}</div>
+            <div className="text-xl sm:text-2xl font-medium text-blue-400 truncate">{showBalance ? formatINR(userData.income || 0) : '₹••••••••'}</div>
           </div>
           <div className="bg-[#16191F] border border-white/5 rounded-3xl p-4 lg:p-6 flex-1 flex flex-col justify-center">
             <div className="text-gray-500 text-[10px] sm:text-xs font-semibold uppercase tracking-wider mb-1 sm:mb-2">Total Expenses</div>
-            <div className="text-xl sm:text-2xl font-medium text-red-400 truncate">{formatINR(userData.expenses || 0)}</div>
+            <div className="text-xl sm:text-2xl font-medium text-red-400 truncate">{showBalance ? formatINR(userData.expenses || 0) : '₹••••••••'}</div>
           </div>
         </div>
       </div>

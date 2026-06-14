@@ -202,16 +202,16 @@ export function History({ transactions }: { transactions: any[] }) {
               initial={{ opacity: 0, scale: 0.95, y: 20 }} 
               animate={{ opacity: 1, scale: 1, y: 0 }} 
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="bg-[#16191F] border border-white/10 rounded-3xl p-8 shadow-2xl relative w-full max-w-md z-10"
+              className="bg-[#16191F] border border-white/10 rounded-3xl shadow-2xl relative w-full max-w-md z-10 max-h-[90vh] flex flex-col overflow-hidden"
             >
               <button 
                 onClick={() => setSelectedTx(null)}
-                className="absolute top-4 right-4 text-gray-400 hover:text-white bg-[#0A0B0D] p-2 rounded-full border border-white/5 transition-colors"
+                className="absolute top-4 right-4 text-gray-400 hover:text-white bg-[#0A0B0D] p-2 rounded-full border border-white/5 transition-colors z-20 shadow-xl"
               >
                 <X className="w-5 h-5" />
               </button>
               
-              <div id="receipt-content-history" className="p-8 pb-4 relative mt-4">
+              <div id="receipt-content-history" className="p-6 pb-4 sm:p-8 sm:pb-4 relative mt-4 overflow-y-auto w-full">
                 <div className="absolute top-0 left-0 w-full h-2 bg-green-500" />
                 <div className="mt-2 mb-6 text-center">
                   <h1 className="text-xl font-bold text-gray-300">MOBILE BANKING</h1>
@@ -271,7 +271,7 @@ export function History({ transactions }: { transactions: any[] }) {
                   )}
                   <div className="flex justify-between border-t border-white/5 pt-4">
                     <span className="text-gray-500">Transaction ID</span>
-                    <span className="text-white font-mono text-xs max-w-[150px] truncate" title={selectedTx.id}>{selectedTx.id}</span>
+                    <span className="text-white font-mono text-xs max-w-[150px] truncate" title={selectedTx.transactionId || selectedTx.id}>{selectedTx.transactionId || selectedTx.id}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-500">Date & Time</span>

@@ -17,7 +17,7 @@ import { Bell, X } from 'lucide-react';
 import { cn } from './lib/utils';
 import { auth } from './lib/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { subscribeToUserData, subscribeToCollection, markAllNotificationsRead } from './lib/firebaseUtils';
+import { subscribeToUserData, subscribeToCollection, markAllNotificationsRead, getOrCreateVirtualCard } from './lib/firebaseUtils';
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
@@ -60,8 +60,11 @@ export default function App() {
   useEffect(() => {
     if (!user?.uid) return;
 
-    const unsubUser = subscribeToUserData(user.uid, (data) => {
+    const unsubUser = subscribeToUserData(user.uid, async (data) => {
       setUserData(data);
+      if (data && (!data.virtualCard || !data.virtualCard.cardId)) {
+        await getOrCreateVirtualCard(user.uid, data.name || 'User', data.virtualCard);
+      }
       if (data && data.isAdmin && activeTab === 'dashboard') setActiveTab('dashboard'); // could redirect to admin
       setLoading(false);
     }, (err) => {
@@ -77,7 +80,40 @@ export default function App() {
       setNotifications, 
       (err) => setAuthError("Failed to fetch notifications."),
       (newNotif) => {
-        toast.success(newNotif.message);
+        if (newNotif.type === 'deposit_request') {
+          toast(
+            (t) => (
+              <div className="flex flex-col gap-3">
+                <div>
+                  <p className="font-medium text-white">{newNotif.title}</p>
+                  <p className="text-sm text-gray-300 mt-1">{newNotif.message}</p>
+                </div>
+                <button 
+                  onClick={() => {
+                    setActiveTab('profile');
+                    setProfileTab('notifications');
+                    toast.dismiss(t.id);
+                  }}
+                  className="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-2 px-4 rounded-xl transition-colors text-sm shadow-[0_0_15px_rgba(37,99,235,0.2)]"
+                >
+                  View Notification
+                </button>
+              </div>
+            ),
+            { icon: '⚠️', duration: 10000, style: { background: '#16191F', border: '1px solid #eab308' } }
+          );
+        } else if (newNotif.type === 'deposit_response' && newNotif.status === 'rejected') {
+          toast.error(newNotif.message, { 
+            icon: '❌',
+            duration: 8000,
+            style: { background: '#16191F', color: '#fff', border: '1px solid rgba(239, 68, 68, 0.4)' }
+          });
+        } else {
+          toast.success(newNotif.message, { 
+            icon: '🔔',
+            style: { background: '#16191F', color: '#fff', border: '1px solid rgba(59, 130, 246, 0.4)' }
+          });
+        }
       }
     );
 
