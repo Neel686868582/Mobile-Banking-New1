@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { formatINR } from '../lib/utils';
 import { ArrowRightLeft, CheckCircle2, Wallet, UserIcon, Download } from 'lucide-react';
-import { doTransfer, validateUpiId } from '../lib/firebaseUtils';
+import { doTransfer, validateUpiId, validateVirtualAcc } from '../lib/firebaseUtils';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'react-hot-toast';
 import * as htmlToImage from 'html-to-image';
@@ -57,20 +57,46 @@ export function Transfer({ user, userData, balance, onComplete }: { user: string
       
       return () => clearTimeout(checkTimer);
     } else {
-      setUpiStatus({ loading: false, valid: false, message: '' });
-      if (acc.length >= 9 && acc.length <= 16 && ifsc.length >= 4) {
-        setIsVerified(true);
-      } else {
+      if (!acc || acc.length < 9) {
         setIsVerified(false);
+        setUpiStatus({ loading: false, valid: false, message: '' });
+        return;
       }
+
+      setIfsc('RPAY0001234'); // Auto-fill
+      
+      const checkTimer = setTimeout(async () => {
+        setUpiStatus({ loading: true, valid: false, message: 'Validating Account...' });
+        try {
+          const res = await validateVirtualAcc(acc, 'RPAY0001234');
+          if (res) {
+            if (res.acc === userData?.accountNumber) {
+               setUpiStatus({ loading: false, valid: false, message: "Cannot transfer to yourself" });
+               setIsVerified(false);
+            } else {
+               setName(res.name);
+               setUpiStatus({ loading: false, valid: true, message: `Verified User` });
+               setIsVerified(true);
+            }
+          } else {
+            setUpiStatus({ loading: false, valid: false, message: 'Account Number not found' });
+            setIsVerified(false);
+          }
+        } catch (e) {
+          setUpiStatus({ loading: false, valid: false, message: 'Error checking Account' });
+          setIsVerified(false);
+        }
+      }, 600);
+      
+      return () => clearTimeout(checkTimer);
     }
-  }, [acc, ifsc, method, userData?.upiId]);
+  }, [acc, method, userData?.upiId, userData?.accountNumber]);
 
   const quickContacts = [
     { name: 'Mom', acc: '1234567890', ifsc: 'HDFC0001234' },
-    { name: 'Dad', acc: '9876543210', ifsc: 'SBIN0001234' },
-    { name: 'Rahul', acc: '1122334455', ifsc: 'ICIC0001234' },
-    { name: 'Priya', acc: '9988776655', ifsc: 'AXIC0001234' },
+    { name: 'Dad', acc: '9876543210', ifsc: 'RPAY0001234' },
+    { name: 'Rahul', acc: '1122334455', ifsc: 'RPAY0001234' },
+    { name: 'Priya', acc: '9988776655', ifsc: 'RPAY0001234' },
   ];
 
   const handleQuickContact = (c: typeof quickContacts[0]) => {
@@ -112,7 +138,7 @@ export function Transfer({ user, userData, balance, onComplete }: { user: string
 
     setLoading(true);
     try {
-      const txId = await doTransfer(user, name, numAmount + currentInfo.fee, method, acc);
+      const txId = await doTransfer(user, name, numAmount + currentInfo.fee, method, acc, ifsc);
       
       await new Promise(r => setTimeout(r, 2000));
       
@@ -280,9 +306,8 @@ export function Transfer({ user, userData, balance, onComplete }: { user: string
 
           {method !== 'UPI' && (
             <div>
-              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Recipient Name</label>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Beneficiary Name (Optional Reference)</label>
               <input 
-                required 
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 type="text" 
@@ -326,19 +351,17 @@ export function Transfer({ user, userData, balance, onComplete }: { user: string
                   minLength={9} 
                   maxLength={16} 
                   pattern="\d+" 
-                  className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-3 px-4 focus:border-blue-500 focus:outline-none transition-colors text-white" 
+                  className={`w-full bg-[#0A0B0D] border ${acc.length >= 9 && !upiStatus.loading && !isVerified ? 'border-red-500/50' : 'border-white/5'} rounded-xl py-3 px-4 focus:border-blue-500 focus:outline-none transition-colors text-white`} 
                   placeholder="e.g. 1234567890" 
                 />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">IFSC Code</label>
                 <input 
-                  required 
-                  value={ifsc}
-                  onChange={(e) => setIfsc(e.target.value.toUpperCase())}
+                  readOnly 
+                  value="RPAY0001234"
                   type="text" 
-                  className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-3 px-4 focus:border-blue-500 focus:outline-none transition-colors uppercase text-white" 
-                  placeholder="e.g. HDFC0001234" 
+                  className="w-full bg-[#16191F] border border-white/5 rounded-xl py-3 px-4 focus:outline-none transition-colors uppercase text-gray-400 opacity-80 cursor-not-allowed" 
                 />
               </div>
             </div>
@@ -346,7 +369,19 @@ export function Transfer({ user, userData, balance, onComplete }: { user: string
 
           {/* 2. Recipient Verification Check */}
           <AnimatePresence>
-            {isVerified && name && (
+            {!isVerified && method !== 'UPI' && acc.length >= 9 && !upiStatus.loading && (
+              <motion.div 
+                initial={{ opacity: 0, height: 0, marginTop: 0 }} 
+                animate={{ opacity: 1, height: 'auto', marginTop: 12 }} 
+                exit={{ opacity: 0, height: 0, marginTop: 0 }}
+                className="overflow-hidden"
+              >
+                <div className="flex items-center gap-2 text-sm text-red-400 bg-red-500/10 px-4 py-3 rounded-xl border border-red-500/20">
+                  <p>✗ Unverified User: Account Number or IFSC Code not found</p>
+                </div>
+              </motion.div>
+            )}
+            {isVerified && name && method !== 'UPI' && (
               <motion.div 
                 initial={{ opacity: 0, height: 0, marginTop: 0 }} 
                 animate={{ opacity: 1, height: 'auto', marginTop: 12 }} 
@@ -355,13 +390,13 @@ export function Transfer({ user, userData, balance, onComplete }: { user: string
               >
                 <div className="flex items-center gap-2 text-sm text-green-400 bg-green-500/10 px-4 py-3 rounded-xl border border-green-500/20">
                   <CheckCircle2 className="w-5 h-5 shrink-0" />
-                  <p>Verified Account Holder: <strong>{name}</strong></p>
+                  <p>Verified User <strong>({name})</strong></p>
                 </div>
               </motion.div>
             )}
           </AnimatePresence>
 
-          <div className={`pt-2 border-t border-white/5 transition-opacity ${method === 'UPI' && !isVerified ? 'opacity-50 pointer-events-none' : ''}`}>
+          <div className={`pt-2 border-t border-white/5 transition-opacity ${!isVerified ? 'opacity-50 pointer-events-none' : ''}`}>
             <div className="flex justify-between items-end mb-2">
               <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">Amount (₹)</label>
             </div>
@@ -374,7 +409,7 @@ export function Transfer({ user, userData, balance, onComplete }: { user: string
               step="0.01" 
               className="w-full bg-[#0A0B0D] border border-white/5 rounded-xl py-4 px-4 focus:border-blue-500 focus:outline-none transition-colors text-2xl font-bold text-white shadow-inner" 
               placeholder="0.00" 
-              disabled={method === 'UPI' && !isVerified}
+              disabled={!isVerified}
             />
           </div>
 
@@ -428,7 +463,7 @@ export function Transfer({ user, userData, balance, onComplete }: { user: string
             </div>
           )}
 
-          <button disabled={loading || numAmount <= 0 || (method === 'UPI' && !isVerified)} type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-gray-950 font-bold py-4 rounded-xl transition-all disabled:opacity-50 text-lg shadow-lg shadow-blue-600/20">
+          <button disabled={loading || numAmount <= 0 || !isVerified} type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-gray-950 font-bold py-4 rounded-xl transition-all disabled:opacity-50 text-lg shadow-lg shadow-blue-600/20">
             {loading ? 'Processing...' : (numAmount > 0 ? `Pay ${formatINR(numAmount + currentInfo.fee)}` : 'Enter Amount to Transfer')}
           </button>
         </form>

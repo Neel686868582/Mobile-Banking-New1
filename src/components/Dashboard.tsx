@@ -72,7 +72,7 @@ export function Dashboard({ userData, setActiveTab, onEnable2FA }: { userData: a
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
               <div>
                 <div className="text-gray-500 text-xs mb-1">Bank</div>
-                <div className="font-semibold text-blue-400 text-sm sm:text-base">SBI Savings</div>
+                <div className="font-semibold text-blue-400 text-sm sm:text-base">RupeePay Bank</div>
               </div>
               <div>
                 <div className="text-gray-500 text-xs mb-1">A/C No.</div>
@@ -80,7 +80,7 @@ export function Dashboard({ userData, setActiveTab, onEnable2FA }: { userData: a
               </div>
               <div className="hidden sm:block">
                 <div className="text-gray-500 text-xs mb-1">IFSC</div>
-                <div className="font-semibold text-gray-200">SBI001</div>
+                <div className="font-semibold text-gray-200">RPAY0001234</div>
               </div>
             </div>
 

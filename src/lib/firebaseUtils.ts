@@ -112,11 +112,22 @@ export async function validateUpiId(upiId: string) {
   return { uid: snap.docs[0].id, name: data.name, upiId: data.upiId };
 }
 
-export async function doTransfer(uid: string, name: string, amount: number, method: string, toAcc: string) {
+export async function validateVirtualAcc(accNumber: string, ifsc: string) {
+  if (ifsc.trim().toUpperCase() !== 'RPAY0001234') return null;
+  const q = query(collection(db, 'users'), where('accountNumber', '==', accNumber.trim()));
+  const snap = await getDocs(q);
+  if (snap.empty) return null;
+  const data = snap.docs[0].data();
+  return { uid: snap.docs[0].id, name: data.name, acc: data.accountNumber };
+}
+
+export async function doTransfer(uid: string, name: string, amount: number, method: string, toAcc: string, ifsc?: string) {
   const numAmount = parseFloat(amount.toString());
 
-  if (method === 'UPI' && toAcc.toLowerCase().endsWith('@rupeepay')) {
-    // Internal RupeePay UPI Transfer
+  const isInternalUpi = method === 'UPI' && toAcc.toLowerCase().endsWith('@rupeepay');
+  const isInternalBank = (method === 'IMPS' || method === 'NEFT' || method === 'RTGS') && ifsc?.trim().toUpperCase() === 'RPAY0001234';
+
+  if (isInternalUpi || isInternalBank) {
     let internalTxId = '';
     await runTransaction(db, async (transaction) => {
       const senderRef = doc(db, 'users', uid);
@@ -127,9 +138,16 @@ export async function doTransfer(uid: string, name: string, amount: number, meth
       if (senderData.balance < numAmount) throw new Error('Insufficient balance');
 
       // Find recipient
-      const q = query(collection(db, 'users'), where('upiId', '==', toAcc.toLowerCase()));
-      const recipientSnaps = await getDocs(q); // getDocs inside transaction is generally okay if not modifying queried collection structure
-      if (recipientSnaps.empty) throw new Error('Recipient UPI ID not found');
+      let recipientSnaps;
+      if (isInternalUpi) {
+        const q = query(collection(db, 'users'), where('upiId', '==', toAcc.toLowerCase()));
+        recipientSnaps = await getDocs(q); 
+      } else {
+        const q = query(collection(db, 'users'), where('accountNumber', '==', toAcc.trim()));
+        recipientSnaps = await getDocs(q); 
+      }
+      
+      if (recipientSnaps.empty) throw new Error('Recipient not found');
       
       const recipientDoc = recipientSnaps.docs[0];
       const recipientId = recipientDoc.id;
@@ -173,7 +191,7 @@ export async function doTransfer(uid: string, name: string, amount: number, meth
         type: 'credit',
         icon: 'ArrowDownLeft',
         fromName: senderData.name,
-        fromAcc: senderData.upiId || 'Unknown',
+        fromAcc: isInternalUpi ? (senderData.upiId || 'Unknown') : (senderData.accountNumber || 'Unknown'),
         method: method
       });
 
@@ -181,7 +199,7 @@ export async function doTransfer(uid: string, name: string, amount: number, meth
       const senderNotifRef = doc(collection(db, 'users', uid, 'notifications'));
       transaction.set(senderNotifRef, {
         title: 'Transfer Successful',
-        message: `${formatINR(numAmount)} sent to ${recipientData.name}.`,
+        message: `₹${numAmount} sent via ${method} to ${recipientData.name}.`,
         date: new Date().toISOString(),
         read: false
       });
@@ -189,10 +207,27 @@ export async function doTransfer(uid: string, name: string, amount: number, meth
       const recipientNotifRef = doc(collection(db, 'users', recipientId, 'notifications'));
       transaction.set(recipientNotifRef, {
         title: 'Amount Received',
-        message: `${formatINR(numAmount)} received from ${senderData.name}.`,
+        message: `₹${numAmount} received via ${method} from ${senderData.name}.`,
         date: new Date().toISOString(),
         read: false
       });
+
+      // Global UPI Transfers Record (Only for UPI for now to not break existing, or we can make a global transfers table)
+      if (isInternalUpi) {
+        const globalTxRef = doc(collection(db, 'upi_transfers'));
+        transaction.set(globalTxRef, {
+          transactionId: senderTxRef.id,
+          amount: numAmount,
+          senderUid: uid,
+          senderName: senderData.name,
+          senderUpiId: senderData.upiId || 'Unknown',
+          recipientUid: recipientId,
+          recipientName: recipientData.name,
+          recipientUpiId: toAcc.toLowerCase(),
+          date: new Date().toISOString(),
+          status: 'SUCCESS'
+        });
+      }
     });
     return internalTxId;
   }
