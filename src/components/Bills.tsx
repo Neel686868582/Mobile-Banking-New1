@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { formatINR } from '../lib/utils';
-import { Receipt, Smartphone, Zap, Droplet, Tv, CheckCircle2, Download, Search, FileText, User, Building2, CreditCard, Wallet } from 'lucide-react';
+import { ReceiptIndianRupee, Smartphone, Zap, Droplet, Tv, CheckCircle2, Download, Search, FileText, User, Building2, CreditCard, Wallet } from 'lucide-react';
 import { payBill } from '../lib/firebaseUtils';
 import { toast } from 'react-hot-toast';
 import { ElectricityBill } from './ElectricityBill';
@@ -275,7 +275,7 @@ const INDIAN_NAMES = ["Rajesh Kumar", "Amit Singh", "Priya Sharma", "Ravi Patel"
   return (
     <div className="max-w-4xl mx-auto mt-10">
       <div className="mb-8">
-        <h2 className="text-3xl font-sans tracking-tight mb-2 flex items-center gap-3"><Receipt className="text-blue-400" /> Utility Bills</h2>
+        <h2 className="text-3xl font-sans tracking-tight mb-2 flex items-center gap-3"><ReceiptIndianRupee className="text-blue-400" /> Utility Bills</h2>
         <p className="text-gray-500">Pay your bills effortlessly. Amount will be deducted from your bank balance directly.</p>
       </div>
 

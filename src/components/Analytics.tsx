@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { BarChart, Bar, Legend, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import { ArrowDownToLine, ArrowRightLeft, Receipt, Target, Activity, TrendingUp, TrendingDown, AlignLeft, BarChart3, Lightbulb } from 'lucide-react';
+import { ArrowDownToLine, ArrowRightLeft, ReceiptIndianRupee, Target, Activity, TrendingUp, TrendingDown, AlignLeft, BarChart3, Lightbulb } from 'lucide-react';
 import { formatINR } from '../lib/utils';
 import { motion } from 'motion/react';
 
@@ -119,7 +119,7 @@ export function Analytics({ appData }: { appData: any }) {
 
         <div className="bg-[#16191F] border border-white/5 rounded-3xl p-6 relative overflow-hidden group hover:shadow-[0_0_20px_rgba(59,130,246,0.15)] hover:border-blue-500/20 transition-all duration-300 hover:-translate-y-1">
           <div className="absolute -top-2 -right-2 p-6 opacity-10 group-hover:opacity-20 transition-opacity">
-            <Receipt className="w-10 h-10 text-purple-400" />
+            <ReceiptIndianRupee className="w-10 h-10 text-purple-400" />
           </div>
           <div className="text-gray-500 text-sm font-semibold uppercase tracking-wider mb-2">Total Bills Paid</div>
           <div className="text-2xl font-light text-white tracking-tight">{formatINR(totalBills)}</div>

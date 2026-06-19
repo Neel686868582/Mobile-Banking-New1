@@ -1,13 +1,13 @@
-import { Wallet, LayoutDashboard, BarChart3, ArrowRightLeft, ArrowDownToLine, Receipt, Clock, Target, Calculator, UserRound, ShieldAlert, LogOut } from 'lucide-react';
+import { Wallet, LayoutDashboard, BarChart3, ArrowRightLeft, ArrowDownToLine, ReceiptIndianRupee, Clock, Target, Calculator, UserRound, ShieldAlert, LogOut } from 'lucide-react';
 import { cn } from '../lib/utils';
 
-export function Sidebar({ activeTab, setActiveTab, isAdmin, onLogout }: { activeTab: string, setActiveTab: (t: string) => void, isAdmin: boolean, onLogout: () => void }) {
+export function Sidebar({ activeTab, setActiveTab, isAdmin, onLogout, hasUnseenVaultInvites }: { activeTab: string, setActiveTab: (t: string) => void, isAdmin: boolean, onLogout: () => void, hasUnseenVaultInvites?: boolean }) {
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'analytics', label: 'Analytics', icon: BarChart3 },
     { id: 'transfer', label: 'Transfer', icon: ArrowRightLeft },
     { id: 'deposit', label: 'Deposit', icon: ArrowDownToLine },
-    { id: 'bills', label: 'Bill Payments', icon: Receipt },
+    { id: 'bills', label: 'Bill Payments', icon: ReceiptIndianRupee },
     { id: 'history', label: 'History', icon: Clock },
     { id: 'goals', label: 'Savings Goals', icon: Target },
     { id: 'loan', label: 'EMI Calculator', icon: Calculator },
@@ -36,14 +36,21 @@ export function Sidebar({ activeTab, setActiveTab, isAdmin, onLogout }: { active
               key={item.id}
               onClick={() => setActiveTab(item.id)}
               className={cn(
-                "flex flex-col md:flex-row items-center justify-center md:justify-start gap-1 md:gap-3 w-16 md:w-full px-1 md:px-4 py-1 md:py-3 rounded-xl text-xs md:text-sm font-medium transition-all group shrink-0",
+                "relative flex flex-col md:flex-row items-center justify-center md:justify-start gap-1 md:gap-3 w-16 md:w-full px-1 md:px-4 py-1 md:py-3 rounded-xl text-xs md:text-sm font-medium transition-all group shrink-0",
                 isActive 
                   ? "bg-blue-600/10 text-blue-400" 
                   : "text-gray-400 hover:bg-[#16191F] hover:text-gray-200"
               )}
             >
-              <Icon className={cn("w-5 h-5 md:w-5 md:h-5", isActive ? "text-blue-400" : "text-gray-500 group-hover:text-gray-400")} />
-              <span className="text-[10px] md:text-sm whitespace-nowrap overflow-hidden text-ellipsis w-full text-center md:text-left">{item.label}</span>
+              <div className="relative flex items-center justify-center shrink-0">
+                <Icon className={cn("w-5 h-5 md:w-5 md:h-5", isActive ? "text-blue-400" : "text-gray-500 group-hover:text-gray-400")} />
+                {item.id === 'goals' && hasUnseenVaultInvites && (
+                  <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-500 ring-2 ring-[#111318] animate-pulse" />
+                )}
+              </div>
+              <span className="text-[10px] md:text-sm whitespace-nowrap overflow-hidden text-ellipsis w-full text-center md:text-left flex items-center justify-center md:justify-start gap-1.5">
+                {item.label}
+              </span>
             </button>
           )
         })}

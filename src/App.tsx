@@ -17,7 +17,7 @@ import { Bell, X } from 'lucide-react';
 import { cn } from './lib/utils';
 import { auth } from './lib/firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { subscribeToUserData, subscribeToCollection, markAllNotificationsRead, getOrCreateVirtualCard } from './lib/firebaseUtils';
+import { subscribeToUserData, subscribeToCollection, markAllNotificationsRead, getOrCreateVirtualCard, subscribeToGroupVaults } from './lib/firebaseUtils';
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
@@ -28,6 +28,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [profileTab, setProfileTab] = useState<'personal'|'security'|'notifications'|'password'>('personal');
   const [showNotifications, setShowNotifications] = useState(false);
+  const [goalsInitialTab, setGoalsInitialTab] = useState<'personal'|'group'>('personal');
+  const [initialActiveVaultId, setInitialActiveVaultId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [is2faVerified, setIs2faVerified] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -57,13 +59,19 @@ export default function App() {
     return () => unsubAuth();
   }, []);
 
+  const [groupVaults, setGroupVaults] = useState<any[]>([]);
+
   useEffect(() => {
     if (!user?.uid) return;
 
     const unsubUser = subscribeToUserData(user.uid, async (data) => {
       setUserData(data);
       if (data && (!data.virtualCard || !data.virtualCard.cardId)) {
-        await getOrCreateVirtualCard(user.uid, data.name || 'User', data.virtualCard);
+        try {
+          await getOrCreateVirtualCard(user.uid, data.name || 'User', data.virtualCard);
+        } catch (err) {
+          console.error("Failed to generate virtual card on load", err);
+        }
       }
       if (data && data.isAdmin && activeTab === 'dashboard') setActiveTab('dashboard'); // could redirect to admin
       setLoading(false);
@@ -74,6 +82,9 @@ export default function App() {
 
     const unsubTx = subscribeToCollection(user.uid, 'transactions', setTransactions, (err) => setAuthError("Failed to fetch transactions."));
     const unsubGoals = subscribeToCollection(user.uid, 'goals', setGoals, (err) => setAuthError("Failed to fetch goals."));
+    const unsubGroupVaults = subscribeToGroupVaults(user.uid, (vaults) => {
+      setGroupVaults(vaults);
+    });
     const unsubNotifs = subscribeToCollection(
       user.uid, 
       'notifications', 
@@ -102,6 +113,31 @@ export default function App() {
             ),
             { icon: '⚠️', duration: 10000, style: { background: '#16191F', border: '1px solid #eab308' } }
           );
+        } else if (newNotif.type === 'vault_invite' || newNotif.title === 'Group Vault Invitation') {
+          toast(
+            (t) => (
+              <div className="flex flex-col gap-3">
+                <div>
+                  <p className="font-medium text-white">{newNotif.title || 'Group Vault Invitation'}</p>
+                  <p className="text-sm text-gray-300 mt-1">{newNotif.message}</p>
+                </div>
+                <button 
+                  onClick={() => {
+                    setGoalsInitialTab('group');
+                    if (newNotif.metadata?.vaultId || newNotif.vaultId) {
+                      setInitialActiveVaultId(newNotif.metadata?.vaultId || newNotif.vaultId);
+                    }
+                    setActiveTab('goals');
+                    toast.dismiss(t.id);
+                  }}
+                  className="w-full bg-blue-600 hover:bg-blue-500 text-slate-950 font-bold py-2 px-4 rounded-xl transition-colors text-sm shadow-[0_0_15px_rgba(59,130,246,0.3)]"
+                >
+                  View
+                </button>
+              </div>
+            ),
+            { icon: '👥', duration: 10000, style: { background: '#16191F', border: '1px solid #3b82f6' } }
+          );
         } else if (newNotif.type === 'deposit_response' && newNotif.status === 'rejected') {
           toast.error(newNotif.message, { 
             icon: '❌',
@@ -121,9 +157,20 @@ export default function App() {
       unsubUser();
       unsubTx();
       unsubGoals();
+      unsubGroupVaults();
       unsubNotifs();
     };
   }, [user?.uid]);
+
+  const hasUnseenVaultInvites = user?.uid ? groupVaults?.some(v => 
+    (v.invitedUids || []).includes(user.uid) && v.members?.[user.uid]?.seenInvitation === false
+  ) : false;
+
+  useEffect(() => {
+    if (hasUnseenVaultInvites) {
+      setGoalsInitialTab('group');
+    }
+  }, [hasUnseenVaultInvites]);
 
   if (loading) {
     return <div className="min-h-screen bg-[#0A0B0D] flex items-center justify-center text-gray-400">Loading...</div>;
@@ -240,7 +287,8 @@ export default function App() {
   return (
     <div className="min-h-[100dvh] flex flex-col md:flex-row bg-[#0A0B0D] text-gray-100 font-sans tracking-tight selection:bg-blue-600/30">
       <Toaster position="top-right" toastOptions={{ style: { background: '#16191F', color: '#fff', border: '1px solid rgba(255,255,255,0.1)' } }} />
-      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} isAdmin={userData.isAdmin} onLogout={handleLogout} />
+      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} isAdmin={userData?.isAdmin} onLogout={handleLogout} hasUnseenVaultInvites={hasUnseenVaultInvites} />
+
       
       <main className="flex-1 flex flex-col h-[100dvh] overflow-hidden pb-16 md:pb-0">
         {/* Header */}
@@ -248,7 +296,7 @@ export default function App() {
           
           <div className="flex-1">
             <h1 className="text-lg md:text-xl font-medium text-white tracking-tight truncate">
-              Welcome, <span className="text-blue-400">{userData.name?.split(' ')[0] || 'User'}</span>
+              Welcome, <span className="text-blue-400">{userData?.name?.split(' ')[0] || 'User'}</span>
             </h1>
           </div>
 
@@ -309,7 +357,23 @@ export default function App() {
                       notifications?.map((n: any) => (
                         <div key={n.id} className={cn("p-4 border-b border-white/5 text-sm", !n.read && "bg-white/5")}>
                           <div className="text-gray-300 mb-1">{n.message}</div>
-                          <div className="text-xs text-gray-500">{new Date(n.date).toLocaleString()}</div>
+                          <div className="text-xs text-gray-500 mb-2">{new Date(n.date).toLocaleString()}</div>
+                          {(n.title === 'Group Vault Invitation' || n.message?.toLowerCase().includes('invited you to join a group vault')) && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setGoalsInitialTab('group');
+                                if (n.metadata?.vaultId) {
+                                  setInitialActiveVaultId(n.metadata.vaultId);
+                                }
+                                setActiveTab('goals');
+                                setShowNotifications(false);
+                              }}
+                              className="text-xs bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/40 px-3 py-1.5 rounded transition-colors font-medium"
+                            >
+                              View
+                            </button>
+                          )}
                         </div>
                       ))
                     )}
@@ -336,7 +400,7 @@ export default function App() {
               {activeTab === 'deposit' && <Deposit user={user.uid} userData={userData} accountNumber={userData?.accountNumber} upiId={userData?.upiId} balance={userData.balance} transactions={transactions} onComplete={() => setActiveTab('dashboard')} />}
               {activeTab === 'bills' && <Bills user={user.uid} userData={userData} onComplete={() => setActiveTab('dashboard')} balance={userData.balance} />}
               {activeTab === 'history' && <History transactions={transactions} />}
-              {activeTab === 'goals' && <Goals user={user.uid} userData={userData} goals={goals} balance={userData.balance} onComplete={() => {}} />}
+              {activeTab === 'goals' && <Goals user={user.uid} userData={userData} goals={goals} groupVaults={groupVaults} balance={userData.balance} onComplete={() => {}} initialViewType={goalsInitialTab} initialActiveVaultId={initialActiveVaultId} onClearInitialActiveVaultId={() => setInitialActiveVaultId(null)} />}
               {activeTab === 'loan' && <Loan />}
               {activeTab === 'profile' && <Profile userData={appData} user={user.uid} onComplete={() => {}} initialTab={profileTab} />}
               {activeTab === 'admin' && userData.isAdmin && <AdminPanel adminUser={user.uid} />}

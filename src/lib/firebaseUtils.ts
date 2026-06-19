@@ -1,6 +1,6 @@
 import { db } from './firebase';
 import { formatINR } from './utils';
-import { doc, getDoc, setDoc, updateDoc, collection, addDoc, getDocs, query, orderBy, onSnapshot, deleteDoc, where, writeBatch, runTransaction } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, collection, addDoc, getDocs, query, orderBy, onSnapshot, deleteDoc, where, writeBatch, runTransaction, arrayRemove } from 'firebase/firestore';
 
 export async function getUserData(uid: string) {
   const userDoc = await getDoc(doc(db, 'users', uid));
@@ -94,11 +94,13 @@ export function subscribeToCollection(uid: string, collectionName: string, callb
 
 const generateId = (prefix: string) => `${prefix}${Date.now().toString().slice(-6)}${Math.floor(100 + Math.random() * 900)}`;
 
-export async function addNotification(uid: string, title: string, message: string) {
+export async function addNotification(uid: string, title: string, message: string, type: string = 'info', metadata: any = null) {
   await addDoc(collection(db, 'users', uid, 'notifications'), {
     notificationId: generateId('NOTIF'),
     title,
     message,
+    type,
+    metadata,
     date: new Date().toISOString(), timestamp: Date.now(),
     read: false
   });
@@ -733,3 +735,415 @@ export async function deleteUser(uid: string) {
   // but deleting the generic document is enough to restrict their use of the app.
   await deleteDoc(doc(db, 'users', uid));
 }
+
+// ==========================================
+// GROUP VAULT FEATURES
+// ==========================================
+
+export async function createGroupVault(
+  uid: string,
+  creatorName: string,
+  name: string,
+  description: string,
+  targetAmount: number,
+  durationMonths: number,
+  mode: 'strict' | 'flexible'
+) {
+  const lockedUntil = durationMonths > 0 ? new Date(Date.now() + durationMonths * 30 * 24 * 60 * 60 * 1000).toISOString() : null;
+  const vaultRef = await addDoc(collection(db, 'group_vaults'), {
+    name,
+    description,
+    targetAmount: parseFloat(targetAmount.toString()),
+    currentAmount: 0,
+    lockedUntil,
+    durationMonths,
+    mode,
+    creatorId: uid,
+    createdAt: new Date().toISOString(),
+    status: 'active', // active, completed, closed
+    memberUids: [uid],
+    invitedUids: [],
+    type: 'group',
+    
+    // Top-level explicit fields for easy viewing in Firebase Console
+    ownerOfVault: creatorName,
+    ownerContribution: 0,
+    invitedUsersData: [],
+    acceptedUsersData: [creatorName],
+    lockinPeriodOfVault: durationMonths > 0 ? `${durationMonths} Months` : 'None',
+
+    members: {
+      [uid]: { uid, name: creatorName, joinedAt: new Date().toISOString(), contributed: 0, status: 'active', role: 'creator' }
+    },
+    timeline: [
+      { id: generateId('TL'), date: new Date().toISOString(), action: 'create', userId: uid, userName: creatorName, details: 'Vault Created' }
+    ],
+    closureTransferApprovals: {}
+  });
+  return vaultRef.id;
+}
+
+export async function verifyUserForInvitation(identifier: string) {
+  const usersRef = collection(db, 'users');
+  let q = query(usersRef, where('email', '==', identifier));
+  let snap = await getDocs(q);
+  if (snap.empty) {
+    q = query(usersRef, where('upiId', '==', identifier));
+    snap = await getDocs(q);
+  }
+  if (snap.empty) {
+    q = query(usersRef, where('accountNumber', '==', identifier));
+    snap = await getDocs(q);
+  }
+  
+  if (snap.empty) return null;
+  
+  const targetUser = snap.docs[0];
+  const targetData = targetUser.data();
+  return { uid: targetUser.id, name: targetData.name, upiId: targetData.upiId, accountNumber: targetData.accountNumber, email: targetData.email, photoURL: targetData.photoURL };
+}
+
+export async function inviteToGroupVault(vaultId: string, inviterUid: string, inviterName: string, targetUid: string, targetName: string, targetEmail?: string, targetUpiId?: string) {
+  const vaultRef = doc(db, 'group_vaults', vaultId);
+  const vaultSnap = await getDoc(vaultRef);
+  if (!vaultSnap.exists()) throw new Error('Vault not found');
+  const vaultData = vaultSnap.data();
+
+  if (vaultData.memberUids.includes(targetUid) || (vaultData.invitedUids || []).includes(targetUid)) {
+    if ((vaultData.invitedUids || []).includes(targetUid)) throw new Error('Invitation already pending');
+    throw new Error('User is already a member of this vault');
+  }
+
+  await updateDoc(vaultRef, {
+    invitedUids: [...(vaultData.invitedUids || []), targetUid],
+    invitedUsersData: [...(vaultData.invitedUsersData || []), targetEmail || targetName],
+    [`members.${targetUid}`]: { uid: targetUid, name: targetName, email: targetEmail || '', upiId: targetUpiId || '', status: 'invited', invitedAt: new Date().toISOString(), seenInvitation: false },
+    timeline: [...vaultData.timeline, { id: generateId('TL'), date: new Date().toISOString(), action: 'invite', userId: inviterUid, userName: inviterName, details: `Invited ${targetName}` }]
+  });
+
+  // Simple Notification
+  await addNotification(targetUid, 'Group Vault Invitation', `${inviterName} invited you to join a Group Vault.`, 'info', {
+    type: 'vault_invite',
+    vaultId: vaultId
+  });
+}
+
+export async function markInvitationSeen(vaultId: string, uid: string) {
+  const vaultRef = doc(db, 'group_vaults', vaultId);
+  await updateDoc(vaultRef, {
+    [`members.${uid}.seenInvitation`]: true
+  });
+}
+
+export async function respondToVaultInvite(vaultId: string, uid: string, userName: string, response: 'accept' | 'decline', creatorUid: string) {
+  const vaultRef = doc(db, 'group_vaults', vaultId);
+  await runTransaction(db, async (transaction) => {
+    const vaultDoc = await transaction.get(vaultRef);
+    if (!vaultDoc.exists()) throw new Error("Vault not found");
+    const data = vaultDoc.data();
+    
+    if (response === 'accept') {
+      const newMembers = { ...data.members };
+      const finalName = (userName && userName !== 'User') ? userName : (newMembers[uid].name || 'User');
+      newMembers[uid] = { ...newMembers[uid], status: 'active', joinedAt: new Date().toISOString(), contributed: 0, name: finalName };
+      transaction.update(vaultRef, {
+        memberUids: [...data.memberUids, uid],
+        invitedUids: data.invitedUids.filter((id: string) => id !== uid),
+        acceptedUsersData: [...(data.acceptedUsersData || []), finalName],
+        members: newMembers,
+        timeline: [...data.timeline, { id: generateId('TL'), date: new Date().toISOString(), action: 'join', userId: uid, userName, details: 'Joined the vault' }]
+      });
+      addNotification(creatorUid, 'Vault Invitation Accepted', `${userName} accepted your invitation.`, 'success');
+    } else {
+      const newMembers = { ...data.members };
+      delete newMembers[uid];
+      transaction.update(vaultRef, {
+        invitedUids: data.invitedUids.filter((id: string) => id !== uid),
+        members: newMembers,
+        timeline: [...data.timeline, { id: generateId('TL'), date: new Date().toISOString(), action: 'decline', userId: uid, userName, details: 'Declined invitation' }]
+      });
+      addNotification(creatorUid, 'Vault Invitation Declined', `${userName} declined your invitation.`, 'info');
+    }
+  });
+}
+
+export async function contributeToGroupVault(uid: string, vaultId: string, amount: number) {
+  const numAmount = parseFloat(amount.toString());
+  const userRef = doc(db, 'users', uid);
+  const vaultRef = doc(db, 'group_vaults', vaultId);
+
+  await runTransaction(db, async (transaction) => {
+    const userDoc = await transaction.get(userRef);
+    const vaultDoc = await transaction.get(vaultRef);
+    
+    if (!userDoc.exists() || !vaultDoc.exists()) throw new Error("Document not found");
+
+    const userData = userDoc.data();
+    const vaultData = vaultDoc.data();
+
+    if (userData.balance < numAmount) throw new Error("Insufficient balance");
+    if (vaultData.status !== 'active') throw new Error("Vault is not active");
+    if (vaultData.members[uid]?.status !== 'active') throw new Error("You must accept the invitation before contributing");
+
+    const userName = vaultData.members[uid]?.name || 'User';
+    const newMembers = { ...vaultData.members };
+    newMembers[uid] = { ...newMembers[uid], contributed: (newMembers[uid].contributed || 0) + numAmount, name: userName };
+
+    transaction.update(userRef, { balance: userData.balance - numAmount, expenses: (userData.expenses || 0) + numAmount });
+    
+    const newVaultAmount = vaultData.currentAmount + numAmount;
+    let status = vaultData.status;
+    let completionTimeline: any[] = [];
+    
+    // Check milestones
+    const oldProgress = (vaultData.currentAmount / vaultData.targetAmount) * 100;
+    const newProgress = (newVaultAmount / vaultData.targetAmount) * 100;
+    
+    if (newProgress >= 25 && oldProgress < 25) completionTimeline.push({ id: generateId('TL'), date: new Date().toISOString(), action: 'milestone', userId: 'system', userName: 'System', details: 'Reached 25% of Target!' });
+    if (newProgress >= 50 && oldProgress < 50) completionTimeline.push({ id: generateId('TL'), date: new Date().toISOString(), action: 'milestone', userId: 'system', userName: 'System', details: 'Reached 50% of Target!' });
+    if (newProgress >= 75 && oldProgress < 75) completionTimeline.push({ id: generateId('TL'), date: new Date().toISOString(), action: 'milestone', userId: 'system', userName: 'System', details: 'Reached 75% of Target!' });
+    
+    if (newVaultAmount >= vaultData.targetAmount && vaultData.currentAmount < vaultData.targetAmount) {
+      status = 'completed';
+      completionTimeline.push({ id: generateId('TL'), date: new Date().toISOString(), action: 'complete', userId: 'system', userName: 'System', details: 'Target Achieved!' });
+      
+      // Send completion notifications to all active members
+      vaultData.memberUids.forEach((memberUid: string) => {
+        addNotification(memberUid, 'Group Savings Champion', `Successfully Completed: ${vaultData.name}. Generating Rewards...`, 'success');
+      });
+    }
+
+    transaction.update(vaultRef, {
+      currentAmount: newVaultAmount,
+      members: newMembers,
+      status,
+      timeline: [...vaultData.timeline, { id: generateId('TL'), date: new Date().toISOString(), action: 'contribute', userId: uid, userName, details: `Contributed ₹${formatINR(numAmount)}` }, ...completionTimeline]
+    });
+
+    const txRef = doc(collection(db, 'users', uid, 'transactions'));
+    transaction.set(txRef, {
+      transactionId: generateId('TXN'),
+      name: `Vault Contribution: ${vaultData.name}`,
+      date: new Date().toISOString(),
+      timestamp: Date.now(),
+      amount: numAmount,
+      type: 'debit',
+      icon: 'Target'
+    });
+    
+    // Notify all other members
+    vaultData.memberUids.forEach((memberUid: string) => {
+       if (memberUid !== uid) {
+          addNotification(memberUid, `Vault Contribution`, `${userName} contributed ${formatINR(numAmount)}.`, 'info');
+       }
+    });
+  });
+}
+
+export function calculateGroupVaultRewards(vaultInfo: { targetAmount: number; currentAmount: number; durationMonths: number; mode: string; memberCount: number; }) {
+  const membersCount = vaultInfo.memberCount || 1;
+  const targetAmount = vaultInfo.targetAmount || 0;
+  
+  let baseRewardPercent = 0.03;
+  if (targetAmount >= 500000) baseRewardPercent = 0.08;
+  else if (targetAmount >= 100000) baseRewardPercent = 0.06;
+  else if (targetAmount >= 50000) baseRewardPercent = 0.04;
+
+  let memberBonusPercent = 0;
+  if (membersCount >= 10) memberBonusPercent = 0.03;
+  else if (membersCount >= 6) memberBonusPercent = 0.02;
+  else if (membersCount >= 4) memberBonusPercent = 0.015;
+  else if (membersCount >= 2) memberBonusPercent = 0.01;
+  else memberBonusPercent = 0;
+
+  const totalBasePercent = baseRewardPercent + memberBonusPercent;
+
+  let durationBonus = 0;
+  const durationMonths = vaultInfo.durationMonths || 0;
+  if (durationMonths >= 36) durationBonus = 0.75;
+  else if (durationMonths >= 24) durationBonus = 0.50;
+  else if (durationMonths >= 12) durationBonus = 0.25;
+  else if (durationMonths >= 6) durationBonus = 0.10;
+
+  let strictBonus = 0;
+  if (vaultInfo.mode === 'strict') strictBonus = 0.50;
+
+  const finalEstPool = targetAmount * totalBasePercent * (1 + durationBonus + strictBonus);
+  const currentRewardPool = (vaultInfo.currentAmount || 0) * totalBasePercent * (1 + durationBonus + strictBonus);
+  const teamCompletionBonus = 1000;
+
+  return {
+    estRewardPool: finalEstPool > 0 ? finalEstPool + teamCompletionBonus : 0,
+    currentRewardPool: currentRewardPool, // Team completion is applied at completion
+    memberMultiplier: 1 + (memberBonusPercent / baseRewardPercent), // For backwards compatibility
+    durationBonus,
+    strictBonus,
+    baseRewardPercent: totalBasePercent,
+    teamCompletionBonus
+  };
+}
+
+export async function withdrawFromGroupVault(uid: string, vaultId: string, amount: number) {
+  const numAmount = parseFloat(amount.toString());
+  const userRef = doc(db, 'users', uid);
+  const vaultRef = doc(db, 'group_vaults', vaultId);
+
+  await runTransaction(db, async (transaction) => {
+    const userDoc = await transaction.get(userRef);
+    const vaultDoc = await transaction.get(vaultRef);
+    
+    if (!userDoc.exists() || !vaultDoc.exists()) throw new Error("Document not found");
+
+    const userData = userDoc.data();
+    const vaultData = vaultDoc.data();
+
+    const isPastDueDate = !vaultData.lockedUntil || Date.now() >= new Date(vaultData.lockedUntil).getTime();
+    const totalGrossContributions = (Object.values(vaultData.members || {}) as any[]).reduce((acc: number, m: any) => acc + (m.contributed || 0), 0) as number;
+    const isCompleted = isPastDueDate;
+
+    if (!isCompleted && vaultData.mode === 'strict') throw new Error("Early withdrawal is not allowed in Strict Vault.");
+    
+    const contributedAmount = vaultData.members[uid]?.contributed || 0;
+    const previouslyWithdrawn = vaultData.members[uid]?.withdrawn || 0;
+    const maxWithdrawable = contributedAmount - previouslyWithdrawn;
+
+    if (maxWithdrawable < numAmount) throw new Error("Cannot withdraw more than available balance");
+
+    let penalty = 0;
+    let reward = 0;
+    let returned = numAmount;
+
+    let totalRewardPoolToDistribute = 0;
+    const memberCount = Object.keys(vaultData.members || {}).length;
+    
+    if (!isCompleted && vaultData.mode === 'flexible') {
+      penalty = numAmount * 0.02; // 2% penalty
+      returned = numAmount - penalty;
+    } else if (isCompleted) {
+      if (!vaultData.members[uid]?.withdrawnEarly) {
+        const rewardsInfo = calculateGroupVaultRewards({
+          targetAmount: vaultData.targetAmount,
+          currentAmount: totalGrossContributions,
+          durationMonths: vaultData.durationMonths,
+          mode: vaultData.mode,
+          memberCount
+        });
+
+        const totalMembers = Object.keys(vaultData.members || {}).length;
+        const eligibleMembers = Object.values(vaultData.members as any).filter((m: any) => !m.withdrawnEarly).length;
+        const everyoneEligible = totalMembers === eligibleMembers;
+
+        totalRewardPoolToDistribute = rewardsInfo.currentRewardPool;
+        if (everyoneEligible) {
+           totalRewardPoolToDistribute += rewardsInfo.teamCompletionBonus;
+        }
+
+        const totalEligibleContributions = (Object.values(vaultData.members || {}) as any[]).reduce((acc: number, m: any) => {
+           if (!m.withdrawnEarly) return acc + (m.contributed || 0);
+           return acc;
+        }, 0) as number;
+
+        if (totalEligibleContributions > 0) {
+           const sharePercent = numAmount / totalEligibleContributions;
+           reward = totalRewardPoolToDistribute * sharePercent;
+        }
+
+        returned = numAmount + reward;
+      }
+    }
+
+    const userName = vaultData.members[uid]?.name || 'User';
+    const newMembers = { ...vaultData.members };
+    newMembers[uid] = { ...newMembers[uid] };
+    newMembers[uid].withdrawn = (newMembers[uid].withdrawn || 0) + numAmount;
+    if (penalty > 0) {
+      newMembers[uid].penaltyPaid = (newMembers[uid].penaltyPaid || 0) + penalty;
+      newMembers[uid].withdrawnEarly = true; // lose reward eligibility
+    }
+    if (reward > 0) {
+      newMembers[uid].rewardClaimed = (newMembers[uid].rewardClaimed || 0) + reward;
+    }
+
+    let timelineDetails = `Withdrew ₹${formatINR(numAmount)}`;
+    if (penalty > 0) timelineDetails += ` (2% penalty)`;
+    if (reward > 0) timelineDetails += ` + ₹${formatINR(reward)} Reward!`;
+
+    // Only deduct numAmount from vault current amount, not the reward (since reward comes from platform, not from vault contributions)
+    transaction.update(userRef, { balance: userData.balance + returned });
+    transaction.update(vaultRef, {
+      currentAmount: vaultData.currentAmount - numAmount,
+      members: newMembers,
+      timeline: [...vaultData.timeline, { id: generateId('TL'), date: new Date().toISOString(), action: 'withdraw', userId: uid, userName, details: timelineDetails }]
+    });
+
+    const txRef = doc(collection(db, 'users', uid, 'transactions'));
+    transaction.set(txRef, {
+      transactionId: generateId('TXN'),
+      name: `Vault Withdrawal: ${vaultData.name}`,
+      date: new Date().toISOString(),
+      timestamp: Date.now(),
+      amount: returned,
+      type: 'credit',
+      icon: 'Target'
+    });
+  });
+}
+
+export async function leaveGroupVault(vaultId: string, uid: string) {
+  const vaultRef = doc(db, 'group_vaults', vaultId);
+  const vaultSnap = await getDoc(vaultRef);
+  if (!vaultSnap.exists()) throw new Error("Vault not found");
+  const vaultData = vaultSnap.data();
+
+  if (vaultData.creatorId === uid) throw new Error("Creator cannot leave vault. They must delete it instead.");
+  
+  const memberRecord = vaultData.members?.[uid] || {};
+  const currentContribution = (memberRecord.contributed || 0) - (memberRecord.withdrawn || 0);
+
+  if (currentContribution > 0) throw new Error("You cannot leave vault with active funds.");
+
+  // Remove from memberUids so it stops showing up in their feed
+  await updateDoc(vaultRef, {
+    memberUids: arrayRemove(uid)
+  });
+}
+
+export async function deleteGroupVault(vaultId: string, uid: string) {
+  const vaultRef = doc(db, 'group_vaults', vaultId);
+  const vaultSnap = await getDoc(vaultRef);
+  if (!vaultSnap.exists()) throw new Error("Vault not found");
+  const vaultData = vaultSnap.data();
+
+  if (vaultData.creatorId !== uid) throw new Error("Only the creator can delete this vault");
+  if (vaultData.currentAmount > 0) throw new Error("Vault deletion disabled. The vault still has funds.");
+
+  await deleteDoc(vaultRef);
+}
+
+export function subscribeToGroupVaults(uid: string, callback: (data: any[]) => void) {
+  let memberVaults: any[] = [];
+  let invitedVaults: any[] = [];
+  
+  const updateFrontend = () => {
+    const map = new Map();
+    memberVaults.forEach(v => map.set(v.id, v));
+    invitedVaults.forEach(v => map.set(v.id, v));
+    callback(Array.from(map.values()).sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+  };
+
+  const q = query(collection(db, 'group_vaults'), where('memberUids', 'array-contains', uid));
+  const unsub1 = onSnapshot(q, (snapshot) => {
+    memberVaults = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    updateFrontend();
+  });
+  
+  const q2 = query(collection(db, 'group_vaults'), where('invitedUids', 'array-contains', uid));
+  const unsub2 = onSnapshot(q2, (snapshot) => {
+    invitedVaults = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    updateFrontend();
+  });
+  
+  return () => { unsub1(); unsub2(); };
+}
+
+
